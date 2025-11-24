@@ -1,86 +1,95 @@
-# ===========================================================================
-#                                  Utils
-# ===========================================================================
+# ------------------------------------
+# Include Sleep library
+# ------------------------------------
+include(getFileProper(script_resource("sleep"), "config.cna"));
+include(getFileProper(script_resource("sleep"), "dialog.cna"));
+include(getFileProper(script_resource("sleep"), "utils.cna"));
 
-# ----------------------------------------------
-# Print information to the Script Console
-# $1 = message
-# ----------------------------------------------
-sub print_info {
-   println(formatDate("[HH:mm:ss] ") . "\cE[SLEEPMASK-VS]\o " . $1);
-}
 
-# ===========================================================================
-#                        Sleep Mask Menu Chooser
-# ===========================================================================
-global('$global_sleep_mask');
-$global_sleep_mask = "default-sleepmask";
+# ------------------------------------
+# Define global variables
+# ------------------------------------
+global('%DEFAULT_CONFIG %SLEEP_MASK_NAMES');
 
-popup sleep_mask_menu
-{
-    item "Sleepmask selector"
-    {
-        local('$dialog');
+%SLEEP_MASK_NAMES = ohash(
+    none => "Default (Built-in)",
+    default-sleepmask => "Default (SLEEPMASK-VS)",
+    indirectsyscalls-sleepmask => "Indirect Syscalls",
+    retaddrspoofing-sleepmask => "Return Address Spoofing",
+    draugr-sleepmask => "Draugr"
+);
 
-        $dialog = dialog("Sleepmask selector", %(slp => $global_sleep_mask), { $global_sleep_mask = $3["slp"]; });
+%DEFAULT_CONFIG = %(
+   sleepmask => "Default (SLEEPMASK-VS)"
+);
 
-        dialog_description($dialog, "Choose which sleepmask to use for subsequent Beacon payloads");
-        drow_combobox($dialog, "slp", "sleepmasks: ", @("default-sleepmask", "indirectsyscalls-sleepmask", "retaddrspoofing-sleepmask", "draugr-sleepmask"));
-        dbutton_action($dialog, "Update");
-
-        dialog_show($dialog);                                                                                               }
-}
-
-# ===========================================================================
-#                               Sleep Mask
-# ===========================================================================
-print_info("Sleepmask-VS Loaded");
-menubar("Sleepmask", "sleep_mask_menu");
+# ------------------------------------
+# Set the Sleep Mask hook
+# ------------------------------------
 set BEACON_SLEEP_MASK {
-   local('$arch $file_name $handle $data $data_len $path $sm_bof $sm_bof_len');
-   $arch = $2;   
+   local('$arch %options $file_name $handle $data $data_len $path $selected_name $sm_bof $sm_bof_len');
+   $arch = $2;
+   %options = $3;
 
-   $file_name = $global_sleep_mask . "." . $arch . ".o";
+   # The Rest API provides a user defined options map, use information from it
+   # to override the sleepmask as the Sleepmask selector is not available
+   # print_info("User defined options: " . %options);
+   if ("sleepmask" in %options) {
+      $selected_name = get_selected_sleepmask(%options);
+   } else {
+      $selected_name = get_selected_sleepmask(get_config());
+   }
+
+   print_info("Selected sleepmask: " . $selected_name);
+
+   # Check if the the Cobalt Strike built in sleepmask is being requested.
+   if ($selected_name eq "none") {
+      print_info("Using the Cobalt Strike built-in sleepmask");
+      return %(status => 1, result => $null, information => "Using the Cobalt Strike built-in sleepmask");
+   }
+
+   # Build the base file name
+   $file_name = $selected_name . "." . $arch . ".o";
 
    # Check the payload architecture.
-   if($arch eq "x64") {
-       $path = getFileProper(script_resource("x64"), "Release", $file_name);
+   if ($arch eq "x64") {
+      $path = getFileProper(script_resource("x64"), "Release", $file_name);
    } 
    else if ($arch eq "x86") {
-       $path = getFileProper(script_resource("Release"), $file_name);
+      $path = getFileProper(script_resource("Release"), $file_name);
    }
    else {
-       warn("Error: Unsupported architecture: $arch");
-       return $null;
+      print_error("Error: Unsupported architecture: $arch");
+      return %(status => 0, result => $null, error => "Error: Unsupported architecture: $arch");
    }
    
    $handle = openf($path);
    $data   = readb($handle, -1);
    closef($handle);
    $data_len = strlen($data);
-   print_info("Sleepmask - $path length: $data_len bytes");
+   print_info("Sleepmask path: $path");
 
    if ($data_len <= 0) {
-      show_error("WARNING: Sleepmask - Error loading the sleep mask object file - reverting to using the default sleep mask.");
-      print_info("Sleepmask - Error loading the sleep mask object file - Reverting to using the default sleep mask.");
-      return $null;
+      print_error("Error: Failed to read $path $+ .");
+      return %(status => 0, result => $null, error => "Error: Failed to read $path $+ .");
    }
 
-   # Extract the bof using sleep_mask as the entry point
+   # Extract the BOF using sleep_mask as the entry point
    $sm_bof = bof_extract($data, "sleep_mask");
    $sm_bof_len = strlen($sm_bof);
 
    if ($sm_bof_len <= 0) {
-      println("Sleepmask - Error extracting the sleep mask bof - Reverting to using the default sleep mask.");
-      return $null;
+      print_error("Error: Failed to extract the sleepmask BOF");
+      return %(status => 0, result => $null, error => "Error: Failed to extract the sleepmask BOF");
    }
 
-   return $sm_bof;
+   print_info("Sleepmask BOF generated. Total size: $sm_bof_len");
+   return %(status => 1, result => $sm_bof, information => "Sleepmask BOF generated. Total size: $sm_bof_len");
 }
 
-# ===========================================================================
-#                               Unit test BOF
-# ===========================================================================
+# ------------------------------------
+# Unit test BOF
+# ------------------------------------
 alias run_beacongate_tests {
     local('$barch $handle $data $bof');
 
@@ -96,7 +105,7 @@ alias run_beacongate_tests {
        $path = getFileProper(script_resource("Release"), $file_name);
     }
     else {
-       warn("Error: Unsupported architecture: $barch");
+       print_error("Error: Unsupported architecture: $barch");
        return $null;
     }
     $handle = openf($path);
@@ -111,3 +120,19 @@ beacon_command_register(
     "run_beacongate_tests",
     "Executes a unit test BOF to test a custom call gate implementation in the sleepmask.",
     "Executes a unit test BOF to test a custom call gate implementation in the sleepmask.");
+
+# ------------------------------------
+# Cobalt Strike UI elements
+# ------------------------------------
+if (getAggressorClientType() eq "ui") {
+   popup sleep_mask_menu
+   {
+      item "Preferences" {
+         show_config_dialog();
+      }
+   }
+
+   menubar("Sleepmask", "sleep_mask_menu");
+}
+
+print_info("Sleepmask-VS Loaded");

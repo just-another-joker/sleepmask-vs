@@ -19,12 +19,9 @@ extern "C" {
 
 #include "sleepmask-vs.h"
 #include "library\debug.cpp"
-#include "library\extc2.cpp"
 #include "library\utils.cpp"
 #include "library\stdlib.cpp"
-#include "library\sleep.cpp"
 #include "library\masking.cpp"
-#include "library\pivot.cpp"
 #include "library\gate.cpp"
 
     /**
@@ -33,71 +30,33 @@ extern "C" {
     * Note: To enable logging for Release builds set ENABLE_LOGGING to
     * 1 in debug.h.
     */
-    void sleep_mask(PSLEEPMASK_INFO info, PFUNCTION_CALL functionCall) {
-        if (info->reason == DEFAULT_SLEEP || info->reason == PIVOT_SLEEP) {
-            DLOGF("SLEEPMASK: Sleeping\n");
-            SleepMaskWrapper(info);
-        }
-        else if (info->reason == BEACON_GATE) {
-            DLOGF("SLEEPMASK: Calling %s via BeaconGate\n", winApiArray[functionCall->function]);
-            BeaconGateWrapper(info, functionCall);
-        }
-
-        return;
+    void sleep_mask(PBEACON_INFO info, PFUNCTION_CALL functionCall) {
+        /* invoke beacon gate */
+        BeaconGateWrapper(info, functionCall);
     }
 }
 
 // Define a main function for the debug build.
-#if defined(_DEBUG) && !defined(_GTEST)
+#if defined(_DEBUG)
 int main(int argc, char* argv[]) {
     /**
-    * Sleepmask Example
+    * Mock how Beacon calls into Sleepmask
     */
-    bof::runMockedSleepMask(sleep_mask,
-        {
-            .allocator = bof::profile::Allocator::VirtualAlloc,
-            .obfuscate = bof::profile::Obfuscate::False,
-            .useRWX = bof::profile::UseRWX::False,
-            .module = "",
-        },
-        {
+    const bof::profile::Stage stage = 
+    {
+        .allocator = bof::profile::Allocator::VirtualAlloc,
+        .obfuscate = bof::profile::Obfuscate::False,
+        .useRWX = bof::profile::UseRWX::False,
+        .module = "",
+    };
+    const bof::mock::MockSleepMaskConfig config = {
             .sleepTimeMs = 5000,
-            .runForever = true,
-        }
-        );
+            .runForever = false,
+    };
 
-    /**
-    * Beacon Gate Example
-    *
-    * Note: The GateArg() Macro ensures arguments are the correct size for the architecture
-    */
-    /*
-    FUNCTION_CALL functionCall = bof::mock::createFunctionCallStructure(
-        VirtualAlloc, // Function Pointer
-        WinApi::VIRTUALALLOC, // Human Readable WinApi Enum
-        TRUE, // Mask Beacon
-        4, // Number of Arguments
-        GateArg(NULL),  // VirtualAlloc Arg1
-        GateArg(0x1000), // VirtualAlloc Arg2
-        GateArg(MEM_RESERVE | MEM_COMMIT), // VirtualAlloc Arg3
-        GateArg(PAGE_EXECUTE_READWRITE) // VirtualAlloc Arg4
-    );
-
-    // Run BeaconGate
-    bof::runMockedBeaconGate(sleep_mask, &functionCall,
-        {
-            .allocator = bof::profile::Allocator::VirtualAlloc,
-            .obfuscate = bof::profile::Obfuscate::False,
-            .useRWX = bof::profile::UseRWX::False,
-            .module = "",
-        });
-
-    // Free the memory allocated by BeaconGate
-    VirtualFree((LPVOID)functionCall.retValue, 0, MEM_RELEASE);
-    */
+    bof::runMockedSleepMask(sleep_mask, stage, config);
+    
     return 0;
 }
 
-// The Googletest framework is currently not compatible with clang. Therefore Sleepmask-vs does not provide support for unit tests.
-#elif defined(_GTEST)
 #endif

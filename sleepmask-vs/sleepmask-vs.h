@@ -2,25 +2,6 @@
 // Include bof-vs header files
 #include "sleepmask.h"
 
-typedef struct _CUSTOM_USER_DATA {
-    char data[32];
-} CUSTOM_USER_DATA, * PCUSTOM_USER_DATA;
-
-typedef struct _EXTC2_SYNC_INFO {
-    HANDLE ExtC2Init;
-    HANDLE ExtC2StopEvent;
-    HANDLE ExtC2SleepEvent;
-    HANDLE ExtC2ContinueEvent;
-} EXTC2_SYNC_INFO, * PEXTC2_SYNC_INFO;
-
-typedef enum {
-    EXTC2_DLL_NOT_LOADED = -1,
-    EXTC2_DLL_EMPTY,
-    EXTC2_DLL_LOADED,
-    EXTC2_DLL_INITIALIZED,
-    EXTC2_DLL_NOT_INITIALIZED,
-} EXTC2_DLL_STATE;
-
 /**
 * Declare functions.
 * 
@@ -30,21 +11,13 @@ typedef enum {
 */
 
 // debug.cpp
-void PrintSleepMaskInfo(PSLEEPMASK_INFO info);
+void PrintSleepMaskInfo(PBEACON_INFO info);
 void PrintAllocatedMemoryRegion(PALLOCATED_MEMORY_REGION memoryRegion);
 void PrintBeaconGateInfo(PFUNCTION_CALL functionCall);
 void PrintSyscallInfo(PBEACON_SYSCALLS info);
 
-// extc2.cpp
-EXTC2_DLL_STATE GetExternalC2DllState(PSLEEPMASK_INFO info, PCUSTOM_USER_DATA customUserData);
-void ExternalC2Sleep(PSLEEPMASK_INFO info, PCUSTOM_USER_DATA customUserData);
-
-// extc2.cpp
-EXTC2_DLL_STATE GetExternalC2DllState(PSLEEPMASK_INFO info, PCUSTOM_USER_DATA customUserData);
-void ExternalC2Sleep(PSLEEPMASK_INFO info, PCUSTOM_USER_DATA customUserData);
-
 // gate.cpp
-void BeaconGateWrapper(PSLEEPMASK_INFO info, PFUNCTION_CALL gateFunction);
+void BeaconGateWrapper(PBEACON_INFO info, PFUNCTION_CALL gateFunction);
 void BeaconGate(PFUNCTION_CALL gateFunction);
 
 // masking.cpp
@@ -54,12 +27,6 @@ void XORHeapRecords(BEACON_INFO* beaconInfo);
 void XORBeacon(BEACON_INFO* beaconInfo, BOOL mask);
 void MaskBeacon(BEACON_INFO* beaconInfo);
 void UnMaskBeacon(BEACON_INFO* beaconInfo);
-
-// pivot.cpp
-void PivotSleep(PSLEEPMASK_INFO info, PCUSTOM_USER_DATA customUserData);
-
-// sleep.cpp
-void SleepMaskWrapper(PSLEEPMASK_INFO info);
 
 // stdlib.cpp 
 BOOL _memcpy(void* dest, void* src, size_t size);

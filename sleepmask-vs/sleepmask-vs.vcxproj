@@ -17,14 +17,6 @@
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="UnitTest|Win32">
-      <Configuration>UnitTest</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="UnitTest|x64">
-      <Configuration>UnitTest</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -59,16 +51,6 @@
     <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
-  </PropertyGroup>
-  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='UnitTest|Win32'">
-    <PlatformToolset>v143</PlatformToolset>
-    <UseDebugLibraries>true</UseDebugLibraries>
-    <CharacterSet>Unicode</CharacterSet>
-  </PropertyGroup>
-  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='UnitTest|x64'">
-    <PlatformToolset>ClangCL</PlatformToolset>
-    <CharacterSet>Unicode</CharacterSet>
-    <UseDebugLibraries>true</UseDebugLibraries>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -118,22 +100,6 @@
     <AdditionalOptions>/std:c++20</AdditionalOptions>
     <LocalDebuggerCommand>x64\Debug\default-sleepmask.exe</LocalDebuggerCommand>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);..\bof-vs\BOF-Template;..\bof-vs\BOF-Template\base</IncludePath>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='UnitTest|x64'">
-    <Microsoft-GoogleTest-Disable-gtest_main>true</Microsoft-GoogleTest-Disable-gtest_main>
-    <LinkToolExe>link.exe</LinkToolExe>
-    <LibToolExe>lib.exe</LibToolExe>
-    <UseLldLink>false</UseLldLink>
-    <UseLlvmLib>false</UseLlvmLib>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);..\bof-vs\BOF-Template;..\bof-vs\BOF-Template\base</IncludePath>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='UnitTest|Win32'">
-    <Microsoft-GoogleTest-Disable-gtest_main>true</Microsoft-GoogleTest-Disable-gtest_main>
-    <LinkToolExe>link.exe</LinkToolExe>
-    <LibToolExe>lib.exe</LibToolExe>
-    <UseLldLink>false</UseLldLink>
-    <UseLlvmLib>false</UseLlvmLib>
     <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);..\bof-vs\BOF-Template;..\bof-vs\BOF-Template\base</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -192,58 +158,18 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='UnitTest|Win32'">
-    <ClCompile>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\build\native\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WarningLevel>Level3</WarningLevel>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_GTEST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <ConformanceMode>false</ConformanceMode>
-    </ClCompile>
-    <Link>
-      <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>$(SolutionDir)\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\lib\native\v140\windesktop\msvcstl\static\rt-static\$(PlatformTarget)\Debug\gtest_maind.lib;$(SolutionDir)\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\lib\native\v140\windesktop\msvcstl\static\rt-static\$(PlatformTarget)\Debug\gtestd.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-    </Link>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='UnitTest|x64'">
-    <ClCompile>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\build\native\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <ConformanceMode>false</ConformanceMode>
-      <WarningLevel>Level3</WarningLevel>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;_GTEST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-    </ClCompile>
-    <Link>
-      <AdditionalDependencies>$(SolutionDir)\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\lib\native\v140\windesktop\msvcstl\static\rt-static\$(PlatformTarget)\Debug\gtest_maind.lib;$(SolutionDir)\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\lib\native\v140\windesktop\msvcstl\static\rt-static\$(PlatformTarget)\Debug\gtestd.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-    <Link>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-    </Link>
-    <Link>
-      <SubSystem>Console</SubSystem>
-    </Link>
-  </ItemDefinitionGroup>
   <ItemGroup>
     <None Include="Makefile" />
-    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\bof-vs\BOF-Template\base\mock.cpp" />
     <ClCompile Include="draugr-sleepmask.cpp" />
     <ClCompile Include="indirectsyscalls-sleepmask.cpp" />
     <ClCompile Include="library\debug.cpp" />
-    <ClCompile Include="library\extc2.cpp" />
     <ClCompile Include="library\gate.cpp" />
     <ClCompile Include="library\indirectsyscalls.cpp" />
     <ClCompile Include="library\masking.cpp" />
-    <ClCompile Include="library\pivot.cpp" />
     <ClCompile Include="library\retaddrspoofing.cpp" />
-    <ClCompile Include="library\sleep.cpp" />
     <ClCompile Include="library\stackspoofing.cpp" />
     <ClCompile Include="library\stdlib.cpp" />
     <ClCompile Include="library\syscallapi.cpp" />
@@ -262,13 +188,4 @@
     <ClInclude Include="sleepmask-vs.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Label="ExtensionTargets">
-    <Import Project="..\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\build\native\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.targets" Condition="Exists('..\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\build\native\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.targets')" />
-  </ImportGroup>
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('..\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\build\native\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.1.8.1.7\build\native\Microsoft.googletest.v140.windesktop.msvcstl.static.rt-static.targets'))" />
-  </Target>
 </Project>

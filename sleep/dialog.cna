@@ -1,0 +1,28 @@
+# ------------------------------------
+# A callback to handle user configuration settings
+#
+# $1 = A reference to the dialog
+# $2 = The "action button" name (Save)
+# $3 = A dictionary containing the row names and their values
+# ------------------------------------
+sub config_callback {
+    local('$action $config_path $file_handle $error %new_config');
+    $action = $2;
+    %new_config = $3;
+
+    if ($action eq 'Save Config') {
+        save_config(%new_config);
+    }
+}
+
+# ------------------------------------
+# A function to show the Sleepmask dialog
+# ------------------------------------
+sub show_config_dialog {
+    local('$dialog');
+
+    $dialog = dialog("Sleepmask Configuration", get_config(), &config_callback);
+    drow_combobox($dialog, "sleepmask", "Sleepmasks:", values(%SLEEP_MASK_NAMES));
+    dbutton_action($dialog, "Save Config");
+    dialog_show($dialog);
+}

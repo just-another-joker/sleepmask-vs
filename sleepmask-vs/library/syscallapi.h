@@ -43,7 +43,7 @@ typedef struct _PS_ATTRIBUTE_LIST {
 } PS_ATTRIBUTE_LIST, * PPS_ATTRIBUTE_LIST;
 
 // Sys call API dispatcher routine. 
-void SysCallDispatcher(PSLEEPMASK_INFO info, PFUNCTION_CALL functionCall);
+void SysCallDispatcher(PBEACON_INFO info, PFUNCTION_CALL functionCall);
 
 // Sys call API wrappers.
 void NtAllocateVirtualMemoryWrapper(PFUNCTION_CALL functionCall);

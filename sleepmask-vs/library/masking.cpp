@@ -68,6 +68,24 @@ BOOL IsWritable(DWORD dwProtection) {
     return FALSE;
 }
 
+bool DripProtectSection(LPVOID baseAddress, SIZE_T size, DWORD protect, DWORD pageSize, PDWORD previous) {
+    DFR_LOCAL(KERNEL32, VirtualProtect);
+    DWORD bytesProtected = 0;
+
+    LPVOID lpCurrent = baseAddress;
+    while (bytesProtected < size) {
+        DWORD bytesToProtect = (size - bytesProtected < pageSize) ? (size - bytesProtected) : pageSize;
+        if (!VirtualProtect(lpCurrent, bytesToProtect, protect, previous)) {
+            DLOG("Failed to change protection on drip-loaded page, crash is likely.\n");
+            return false;
+        }
+        bytesProtected += bytesToProtect;
+        lpCurrent = (LPVOID)((ULONG_PTR)lpCurrent + bytesToProtect);
+    }
+
+    return true;
+}
+
 /**
 * XOR the sections in the provided memory region
 *
@@ -92,10 +110,24 @@ void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL m
             // Change protections on any RX regions if masking
             if (allocatedRegion->Sections[i].CurrentProtect == PAGE_EXECUTE_READ && mask == TRUE) {
                 oldProtection = 0;
-                if (!VirtualProtect(baseAddress, allocatedRegion->Sections[i].VirtualSize, PAGE_READWRITE, &oldProtection)) {
-                    DLOG("Failed to change protection from RX to RW turning MaskSection to FALSE, go to next section.\n");
-                    allocatedRegion->Sections[i].MaskSection = FALSE;
-                    continue;
+                if (allocatedRegion->Sections[i].DripLoadPageSize) {
+                    // Handle drip-loaded sections which are protected in chunks
+                    bool success = DripProtectSection(
+                        allocatedRegion->Sections[i].BaseAddress,
+                        allocatedRegion->Sections[i].VirtualSize,
+                        PAGE_READWRITE,
+                        allocatedRegion->Sections[i].DripLoadPageSize,
+                        &oldProtection
+                    );
+                    if (!success)
+                        continue;
+                }
+                else {
+                    if (!VirtualProtect(baseAddress, allocatedRegion->Sections[i].VirtualSize, PAGE_READWRITE, &oldProtection)) {
+                        DLOG("Failed to change protection from RX to RW turning MaskSection to FALSE, go to next section.\n");
+                        allocatedRegion->Sections[i].MaskSection = FALSE;
+                        continue;
+                    }
                 }
                 allocatedRegion->Sections[i].CurrentProtect = PAGE_READWRITE;
                 allocatedRegion->Sections[i].PreviousProtect = oldProtection;
@@ -109,9 +141,23 @@ void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL m
             // Restore original protections when unmasking
             if (allocatedRegion->Sections[i].PreviousProtect != allocatedRegion->Sections[i].CurrentProtect && mask == FALSE) {
                 oldProtection = 0;
-                if (!VirtualProtect(baseAddress, allocatedRegion->Sections[i].VirtualSize, allocatedRegion->Sections[i].PreviousProtect, &oldProtection)) {
-                    DLOG("Failed to restore oiginal protection on virtual memory, crash is likely.\n");
-                    continue;
+                if (allocatedRegion->Sections[i].DripLoadPageSize) {
+                    // Handle drip-loaded sections which are protected in chunks
+                    bool success = DripProtectSection(
+                        allocatedRegion->Sections[i].BaseAddress,
+                        allocatedRegion->Sections[i].VirtualSize,
+                        allocatedRegion->Sections[i].PreviousProtect,
+                        allocatedRegion->Sections[i].DripLoadPageSize,
+                        &oldProtection
+                    );
+                    if (!success)
+                        continue;
+                }
+                else {
+                    if (!VirtualProtect(baseAddress, allocatedRegion->Sections[i].VirtualSize, allocatedRegion->Sections[i].PreviousProtect, &oldProtection)) {
+                        DLOG("Failed to restore oiginal protection on virtual memory, crash is likely.\n");
+                        continue;
+                    }
                 }
                 allocatedRegion->Sections[i].CurrentProtect = allocatedRegion->Sections[i].PreviousProtect;
                 allocatedRegion->Sections[i].PreviousProtect = oldProtection;

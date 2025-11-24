@@ -23,15 +23,15 @@ void dlog(const char* fmt, ...) {
 * 
 * @param info A pointer to a SLEEPMASK_INFO structure.
 */
-void PrintSleepMaskInfo(PSLEEPMASK_INFO info) {
-    DLOGF("SLEEPMASK: Version: %X\n", info->beacon_info.version);
-    DLOGF("SLEEPMASK: Sleepmask: %p\n", info->beacon_info.sleep_mask_ptr);
-    DLOGF("SLEEPMASK: Sleepmask Text Size: %x\n", info->beacon_info.sleep_mask_text_size);
-    DLOGF("SLEEPMASK: Sleepmask Total Size: %x\n", info->beacon_info.sleep_mask_total_size);
-    DLOGF("SLEEPMASK: Beacon: %p\n", info->beacon_info.beacon_ptr);
-    DLOGF("SLEEPMASK: Heap Records: %p\n", info->beacon_info.heap_records);
-    DLOGF("SLEEPMASK: Mask Key: %p\n", &info->beacon_info.mask[0]);
-    DLOGF("SLEEPMASK: Allocated Memory: %p\n", &info->beacon_info.allocatedMemory);
+void PrintSleepMaskInfo(PBEACON_INFO info) {
+    DLOGF("SLEEPMASK: Version: %X\n", info->version);
+    DLOGF("SLEEPMASK: Sleepmask: %p\n", info->sleep_mask_ptr);
+    DLOGF("SLEEPMASK: Sleepmask Text Size: %x\n", info->sleep_mask_text_size);
+    DLOGF("SLEEPMASK: Sleepmask Total Size: %x\n", info->sleep_mask_total_size);
+    DLOGF("SLEEPMASK: Beacon: %p\n", info->beacon_ptr);
+    DLOGF("SLEEPMASK: Heap Records: %p\n", info->heap_records);
+    DLOGF("SLEEPMASK: Mask Key: %p\n", &info->mask[0]);
+    DLOGF("SLEEPMASK: Allocated Memory: %p\n", &info->allocatedMemory);
 
     return;
 }

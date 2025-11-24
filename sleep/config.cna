@@ -1,0 +1,51 @@
+# ------------------------------------
+# Retrieves the path of the configuration file.
+#
+# return = the configuration file path
+# ------------------------------------
+sub get_config_path {
+    return getFileProper(script_resource(""), 'sleepmask-vs.config.bin');
+}
+
+# ------------------------------------
+# Loads the user configuration from the config file. 
+#
+# Note: If the configuration does not exist this function
+# will return the default configuration (%DEFAULT_CONFIG)
+#
+# return = a hash map containing configuration settings
+# ------------------------------------
+sub get_config {
+    local('$config_path $file_handle $error $config');
+    $config_path = get_config_path();
+    if (-exists $config_path && -isFile $config_path) {
+        $file_handle = openf($config_path);
+        if (checkError($error)) {
+            print_error("Could not read the configuration. Using default values.");
+            return %DEFAULT_CONFIG;
+        }
+        $config = readObject($file_handle);
+        closef($file_handle);
+        return $config;
+    }
+    return %DEFAULT_CONFIG;
+}
+
+# ------------------------------------
+# Save the current user configuration
+#
+# $1 = The updated user configuration
+# ------------------------------------
+sub save_config {
+    local('$config_path $file_handle $error %new_config');
+    %new_config = $1;
+
+    $config_path = get_config_path();
+    $file_handle = openf(">$config_path");
+    if (checkError($error)) {
+        print_error("Could not open " . $config_path . ". Unable to save current configuration.");
+        return;
+    }
+    writeObject($file_handle, %new_config);
+    closef($file_handle);
+}

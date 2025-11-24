@@ -1,0 +1,32 @@
+# ----------------------------------------------
+# Print information to the Script Console
+# $1 = message
+# ----------------------------------------------
+sub print_info {
+   println(formatDate("[HH:mm:ss] ") . "\cE[SLEEPMASK-VS]\o " . $1);
+}
+
+sub print_error {
+   println(formatDate("[HH:mm:ss] ") . "\c4[SLEEPMASK-VS]\o " . $1);
+}
+
+# ------------------------------------
+# A function to get the selected sleepmask from the user configuration
+#
+# $1 = The options map with the config information
+#
+# return = The base file name of the selected sleepmask
+# ------------------------------------
+sub get_selected_sleepmask {
+    local('$key $value %config');
+
+    %config = $1;
+
+    # Get the selected sleepmask
+    foreach $key => $value (%SLEEP_MASK_NAMES) {
+        if ($value eq %config['sleepmask']) {
+           return $key;
+        }
+    }
+    return $null;
+}

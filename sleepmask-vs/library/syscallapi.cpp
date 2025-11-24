@@ -12,11 +12,11 @@
 * @param info A pointer to a SLEEPMASK_INFO structure.
 * @param info A pointer to a FUNCTION_CALL structure.
 */
-void SysCallDispatcher(PSLEEPMASK_INFO info, PFUNCTION_CALL functionCall) {
+void SysCallDispatcher(PBEACON_INFO info, PFUNCTION_CALL functionCall) {
 
     // Mask Beacon.
     if (functionCall->bMask == TRUE) {
-        MaskBeacon(&info->beacon_info);
+        MaskBeacon(info);
     }
 
     // API dispatcher.
@@ -50,7 +50,7 @@ void SysCallDispatcher(PSLEEPMASK_INFO info, PFUNCTION_CALL functionCall) {
 
     // Unmask Beacon.
     if (functionCall->bMask == TRUE) {
-        UnMaskBeacon(&info->beacon_info);
+        UnMaskBeacon(info);
     }
 
     return;

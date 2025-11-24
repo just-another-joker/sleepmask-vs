@@ -82,9 +82,9 @@ void DraugrGate(PDRAUGR_FUNCTION_CALL draugrCall) {
 * @param info A pointer to a SLEEPMASK_INFO structure.
 * @param draugrCall A pointer to a DRAUGR_FUNCTION_CALL structure.
 */
-void DraugrGateWrapper(PSLEEPMASK_INFO info, PDRAUGR_FUNCTION_CALL draugrCall) {
+void DraugrGateWrapper(PBEACON_INFO info, PDRAUGR_FUNCTION_CALL draugrCall) {
     if (draugrCall->FunctionCall->bMask == TRUE) {
-        MaskBeacon(&info->beacon_info);
+        MaskBeacon(info);
     }
 
     if (draugrCall->StackFrame) {
@@ -98,7 +98,7 @@ void DraugrGateWrapper(PSLEEPMASK_INFO info, PDRAUGR_FUNCTION_CALL draugrCall) {
     }
 
     if (draugrCall->FunctionCall->bMask == TRUE) {
-        UnMaskBeacon(&info->beacon_info);
+        UnMaskBeacon(info);
     }
 
     return;

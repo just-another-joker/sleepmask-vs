@@ -21,12 +21,9 @@ extern "C" {
 
 #include "sleepmask-vs.h"
 #include "library\debug.cpp"
-#include "library\extc2.cpp"
 #include "library\utils.cpp"
 #include "library\stdlib.cpp"
-#include "library\sleep.cpp"
 #include "library\masking.cpp"
-#include "library\pivot.cpp"
 #include "library\gate.cpp"
 
 /**
@@ -69,7 +66,7 @@ extern "C" {
     * Note: To enable logging for Release builds set ENABLE_LOGGING to
     * 1 in debug.h.
     */
-    void sleep_mask(PSLEEPMASK_INFO info, PFUNCTION_CALL functionCall) {
+    void sleep_mask(PBEACON_INFO info, PFUNCTION_CALL functionCall) {
         static BOOL draugrInitialized = FALSE;
         static DRAUGR_FUNCTION_CALL draugrCall;
 
@@ -84,33 +81,20 @@ extern "C" {
             draugrInitialized = TRUE;
         }
 
-        // [2] Route the call.
-        if (info->reason == DEFAULT_SLEEP || info->reason == PIVOT_SLEEP) {
-            DLOGF("SLEEPMASK: Sleeping\n");
-            SleepMaskWrapper(info);
-        }
-        else if (info->reason == BEACON_GATE) {
-            // Attach the passed function call to our Draugr struct.
-            draugrCall.FunctionCall = functionCall;
-            DraugrGateWrapper(info, &draugrCall);
-            // Null it out on exit for next time.
-            draugrCall.FunctionCall = NULL;
-        }
+        // Attach the passed function call to our Draugr struct.
+        draugrCall.FunctionCall = functionCall;
+        DraugrGateWrapper(info, &draugrCall);
+        // Null it out on exit for next time.
+        draugrCall.FunctionCall = NULL;
 
         return;
     }
 }
 #else
     // This is more verbose but avoids intellisense errors.
-    void sleep_mask(PSLEEPMASK_INFO info, PFUNCTION_CALL functionCall) {
-        if (info->reason == DEFAULT_SLEEP || info->reason == PIVOT_SLEEP) {
-            DLOGF("SLEEPMASK: Sleeping\n");
-            SleepMaskWrapper(info);
-        }
-        else if (info->reason == BEACON_GATE) {
-            DLOGF("SLEEPMASK: Calling %s via BeaconGate\n", winApiArray[functionCall->function]);
-            BeaconGateWrapper(info, functionCall);
-        }
+    void sleep_mask(PBEACON_INFO info, PFUNCTION_CALL functionCall) {
+        DLOGF("SLEEPMASK: Calling %s via BeaconGate\n", winApiArray[functionCall->function]);
+        BeaconGateWrapper(info, functionCall);
 
         return;
     }
@@ -118,7 +102,7 @@ extern "C" {
 #endif
 
 // Define a main function for the debug build
-#if defined(_DEBUG) && !defined(_GTEST)
+#if defined(_DEBUG)
 #include "unit-tests\syscallapi-unit-tests.cpp"
 int main(int argc, char* argv[]) {
     /**
@@ -157,6 +141,4 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-// The Googletest framework is currently not compatible with clang. Therefore Sleepmask-vs does not provide support for unit tests.
-#elif defined(_GTEST)
 #endif
