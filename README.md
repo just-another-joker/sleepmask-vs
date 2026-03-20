@@ -11,6 +11,11 @@ we have included the examples described below:
   proxied WinAPIs.
 * `draugr-sleepmask` - a BeaconGate example that uses return address spoofing and a spoofed 
  stack frame to create a 'legitimate' stack ([Draugr](https://github.com/NtDallas/Draugr))
+* `threadpool-sleepmask` - a BeaconGate example that intercepts Sleep calls using Thread Pool
+  Timers (`TpAllocTimer`/`TpSetTimerEx`) for sleep obfuscation, combined with Draugr stack
+  spoofing for all other proxied WinAPIs. Worker threads wait via
+  `NtWaitForWorkViaWorkerFactory`, which is indistinguishable from legitimate system thread
+  pool activity.
 
 Additionally, for testing custom call gates we have added:
 
@@ -110,6 +115,36 @@ To use Sleepmask-VS:
 5. Select the required Sleepmask from the drop down menu item
 6. Save the configuration
 7. Export a Beacon
+
+### Cross-Compiling with CMake (Linux)
+
+As an alternative to building on Windows with Visual Studio, Sleepmask-VS can
+be cross-compiled on Linux using Clang and the MinGW-w64 toolchain. This
+produces the same COFF `.o` files that the Windows build generates.
+
+**Prerequisites:**
+* `clang` (tested with 18.x)
+* MinGW-w64 headers (`x86_64-w64-mingw32` and `i686-w64-mingw32`)
+* `cmake` (3.20+)
+* `python3` (for `boflint`)
+
+**Building:**
+```bash
+# Initialize submodules (if not already done)
+git submodule update --init
+
+# Build x64 release objects
+cmake -B build-x64 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-win-x64.cmake
+cmake --build build-x64
+
+# Build x86 release objects
+cmake -B build-x86 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-win-x86.cmake
+cmake --build build-x86
+```
+
+Output files are placed in `x64/Release/*.x64.o` and `Release/*.x86.o`,
+matching the layout expected by `sleepmask.cna`. The `boflint` linter runs
+automatically on each `.o` file as a post-build step.
 
 ### Logging
 
