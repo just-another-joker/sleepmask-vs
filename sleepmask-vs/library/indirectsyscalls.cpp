@@ -1,4 +1,4 @@
-#include <Windows.h>
+#include <windows.h>
 #include "..\sleepmask-vs.h"
 #include "..\library\syscallapi.h"
 #include "..\library\indirectsyscalls.h"

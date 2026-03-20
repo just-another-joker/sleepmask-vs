@@ -1,4 +1,4 @@
-#include <Windows.h>
+#include <windows.h>
 #include "..\library\retaddrspoofing.h"
 #include "..\sleepmask-vs.h"
 #include "..\base\helpers.h"

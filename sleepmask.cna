@@ -16,7 +16,8 @@ global('%DEFAULT_CONFIG %SLEEP_MASK_NAMES');
     default-sleepmask => "Default (SLEEPMASK-VS)",
     indirectsyscalls-sleepmask => "Indirect Syscalls",
     retaddrspoofing-sleepmask => "Return Address Spoofing",
-    draugr-sleepmask => "Draugr"
+    draugr-sleepmask => "Draugr",
+    threadpool-sleepmask => "Thread Pool Timer"
 );
 
 %DEFAULT_CONFIG = %(

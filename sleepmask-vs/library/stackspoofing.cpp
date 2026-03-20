@@ -5,7 +5,7 @@
 #include "..\base\helpers.h"
 #include "..\debug.h"
 
-#include <Windows.h>
+#include <windows.h>
 
 #define draugrArg(i) (ULONG_PTR)draugrCall->FunctionCall->args[i]
 

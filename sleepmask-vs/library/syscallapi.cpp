@@ -1,4 +1,4 @@
-#include "Windows.h"
+#include "windows.h"
 #include "..\beacon.h"
 #include "..\sleepmask.h"
 #include "..\sleepmask-vs.h"
