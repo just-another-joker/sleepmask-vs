@@ -13,9 +13,10 @@ we have included the examples described below:
  stack frame to create a 'legitimate' stack ([Draugr](https://github.com/NtDallas/Draugr))
 * `threadpool-sleepmask` - a BeaconGate example that intercepts Sleep calls using Thread Pool
   Timers (`TpAllocTimer`/`TpSetTimerEx`) for sleep obfuscation, combined with Draugr stack
-  spoofing for all other proxied WinAPIs. Worker threads wait via
-  `NtWaitForWorkViaWorkerFactory`, which is indistinguishable from legitimate system thread
-  pool activity.
+  spoofing for all other proxied WinAPIs. Includes Ekko-style self-masking: the sleepmask's
+  own `.text` section is encrypted during sleep via an `NtContinue` timer chain that calls
+  `SystemFunction032` (advapi32 RC4) and `VirtualProtect` from outside the sleepmask code.
+  Falls back to basic timer sleep if `advapi32.dll` is unavailable.
 
 Additionally, for testing custom call gates we have added:
 

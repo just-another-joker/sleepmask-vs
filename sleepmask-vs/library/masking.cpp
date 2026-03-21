@@ -53,6 +53,12 @@ void RC4Data(char* buffer, size_t size, char* key, size_t keyLen) {
         S[jj] = tmp;
         buffer[n] ^= S[(unsigned char)(S[ii] + S[jj])];
     }
+
+    // Zero S-box to prevent key recovery from stack residue.
+    volatile unsigned char* vS = S;
+    for (int i = 0; i < 256; i++) {
+        vS[i] = 0;
+    }
 }
 
 /**
