@@ -1,46 +1,11 @@
-# Sleepmask-VS
+# Threadpool Sleepmask
 
-This repository contains a collection of Sleepmask examples built on top of the Beacon 
-Object File Visual Studio template ([BOF-VS](https://github.com/Cobalt-Strike/bof-vs)).
-Sleepmask-VS is intended to function as a library, however, to support development efforts,
-we have included the examples described below:
+This repository adds `threadpool-sleepmask`, an advanced sleepmask variant to [sleepmask-vs](https://github.com/Cobalt-Strike/sleepmask-vs).
+It combines Thread Pool Timer sleep obfuscation with Draugr stack spoofing and
+Ekko-style self-masking to produce a beacon and sleepmask with low-observability, bypassing
+[pe-sieve](https://github.com/hasherezade/pe-sieve) while sleeping.
 
-* `indirectsyscalls-sleepmask` - a BeaconGate example that uses indirect syscalls to call 
-  proxied WinAPIs.
-* `retaddrspoofing-sleepmask` - a BeaconGate example that spoofs the return address of 
-  proxied WinAPIs.
-* `draugr-sleepmask` - a BeaconGate example that uses return address spoofing and a spoofed 
- stack frame to create a 'legitimate' stack ([Draugr](https://github.com/NtDallas/Draugr))
-* `threadpool-sleepmask` - a BeaconGate example that intercepts Sleep calls using Thread Pool
-  Timers (`TpAllocTimer`/`TpSetTimerEx`) for sleep obfuscation, combined with Draugr stack
-  spoofing for all other proxied WinAPIs. Includes Ekko-style self-masking: the sleepmask's
-  own `.text` section is encrypted during sleep via an `NtContinue` timer chain that calls
-  `SystemFunction032` (advapi32 RC4) and `VirtualProtect` from outside the sleepmask code.
-  Context is captured on the timer thread itself (via `RtlCaptureContext` as a timer callback)
-  and event synchronization (`NtSignalAndWaitForSingleObject`) eliminates race conditions.
-  Falls back to basic timer sleep if `advapi32.dll` is unavailable.
-
-Additionally, for testing custom call gates we have added:
-
-* `TestSysCallApi()` - a function to unit test the [Core API](https://hstechdocs.helpsystems.com/manuals/cobaltstrike/current/userguide/content/topics/beacon-gate.htm)
-set exposed by BeaconGate().
-* `unit-test-bof` - a BOF to call every exported system call API exposed by the BOF C API 
- (i.e. BeaconVirtualAlloc). This can be run via a live Beacon to test that call gates work 
- in 'production'. The System Call API exposed to BOFs is a smaller subset of the 'Core' API.
-
-**Note**: This repository assumes familiarity with BOF-VS. The BOF-VS project README contains
-information about the Dynamic Function Resolution (DFR) macros and helper functions used
-throughout this project.
-
-## Quick Start Guide
-
-### Prerequisites:
-
-* An x64 Windows 10/11 development machine (without a security solution)
-* Visual Studio Community/Pro/Enterprise 2022 (Desktop Development with C++ installed)
-* The Clang compiler for Windows (Visual Studio Installer -> Modify -> Individual Components -> C++ Clang Compiler for Windows)
-
-**Note:** Sleepmask-VS requires Clang to facilitate inline assembly blocks (`__asm{}`). Compilation will therefore fail if Clang has not been installed. This project has been tested on v17.0.3.
+---
 
 ### Cloning the repo:
 
@@ -56,68 +21,52 @@ rm -r bof-vs
 git submodule add https://github.com/cobalt-strike/bof-vs
 ```
 
-### Debug
+### How it works
 
-The `Debug` target builds Sleepmask-VS as an executable, which 
-allows you to benefit from the convenience of debugging it within
-Visual Studio. This will enable you to work at the source
-code level without running the Sleepmask BOF through a Beacon.
-In addition, BOF-VS provides a mocking framework to simplify
-Sleepmask/BeaconGate development. For example, setupMockBeacon()
-creates some mock Beacon memory and replicates the specified
-malleable C2 settings:
+During a sleep cycle the sleepmask encrypts **both** the beacon memory regions
+(sections + heap records) **and** its own `.text` section. Because the sleepmask
+code itself is encrypted and marked `PAGE_READWRITE`, tools like pe-sieve that
+scan for executable shellcode or in-memory PE anomalies find nothing recognizable
+in the process — the implant is completely masked at rest.
 
-```
-int main(int argc, char* argv[]) {
+The implementation chains seven `NtContinue`-driven timer callbacks on a dedicated
+timer thread (`WT_EXECUTEINTIMERTHREAD`), each resuming a pre-built `CONTEXT` that
+drives the next step:
 
-    BEACON_INFO beaconInfo = bof::mock::setupMockBeacon(
-        {
-            .allocator = bof::profile::Allocator::VirtualAlloc,
-            .obfuscate = bof::profile::Obfuscate::False,
-            .useRWX = bof::profile::UseRWX::False,
-            .module = "",
-        });
+| Step | Function | Purpose |
+|------|----------|---------|
+| 0 | `WaitForSingleObjectEx` | Gate — blocks until the main thread signals `EvntStart` |
+| 1 | `VirtualProtect` | Mark sleepmask `.text` as `PAGE_READWRITE` |
+| 2 | `SystemFunction032` | RC4-encrypt sleepmask code (advapi32) |
+| 3 | `WaitForSingleObjectEx` | **The actual sleep** — waits on `NtCurrentProcess` for the requested duration |
+| 4 | `SystemFunction032` | RC4-decrypt sleepmask code |
+| 5 | `VirtualProtect` | Restore sleepmask `.text` to `PAGE_EXECUTE_READ` |
+| 6 | `SetEvent` | Signal `EvntEnd` — wake the main thread |
 
-[...]
+Key design details:
 
-```
+* **Race-condition-free context capture** — `RtlCaptureContext` runs as a timer
+  callback on the timer thread itself. The main thread waits on `EvntTimer` until
+  the capture is complete before building the NtContinue chain.
+* **Atomic chain trigger** — `NtSignalAndWaitForSingleObject` atomically signals
+  `EvntStart` (unblocking step 0) and waits on `EvntEnd` (blocking until step 6).
+  This call is routed through **Draugr stack spoofing** so the main thread's call
+  stack appears clean while blocked in the kernel wait.
+* **CFG compatibility** — Timer callback targets (`NtContinue`, `RtlCaptureContext`,
+  `SetEvent`) are registered as valid CFG indirect call targets via
+  `SetProcessValidCallTargets` on CFG-enabled processes.
+* **Clean timer dispatch flow** — NtContinue target functions return naturally to
+  the timer dispatch code (no `NtTestAlert` trampolining), preserving the thread
+  pool's internal bookkeeping.
+* **Blocking cleanup** — `RtlDeleteTimerQueueEx(INVALID_HANDLE_VALUE)` ensures
+  the timer thread has fully terminated before queue structures are freed.
+* **Graceful fallback** — If `advapi32.dll` or any required function pointer
+  cannot be resolved, the sleepmask falls back to a basic `TpAllocTimer` sleep
+  that still masks/unmasks beacon memory.
 
-It is also possible to mock Beacon's WINAPI calls. For example,
-`createFunctionCallStructure()` can generate a `FUNCTION_CALL`
-structure for the desired WinAPI. The output can then be passed
-to either `runMockedSleepMask()`/`runMockedBeaconGate()` to replicate
-Beacon's behavior:
-
-```
-[...]
-    FUNCTION_CALL functionCall = bof::mock::createFunctionCallStructure(
-        Sleep,         // Function pointer
-        WinApi::SLEEP, // Human-readable WinAPI enum
-        TRUE,          // Mask Beacon
-        1,             // Number of arguments for function call
-        GateArg(5000)  // Sleep time (5 seconds)
-    );
-
-    bof::runMockedSleepMask(sleep_mask, &beaconInfo, &functionCall);
-    
-    return 0;
-}
-
-```
-
-### Release
-
-The `Release` target compiles an object file for use
-with Cobalt Strike. 
-
-To use Sleepmask-VS:
-1. Enable the Sleepmask (`stage.sleep_mask "true";`)
-2. Enable required BeaconGate functions (`stage.beacon_gate { ... }`)
-3. Compile Sleepmask-VS
-4. Load `sleepmask.cna` in the Script Manager. This will create a new menu item called Sleepmask
-5. Select the required Sleepmask from the drop down menu item
-6. Save the configuration
-7. Export a Beacon
+For all non-sleep API calls intercepted by BeaconGate (e.g. network I/O, handle
+operations), Draugr stack spoofing is applied so every proxied call has a
+synthetic call stack resembling `BaseThreadInitThunk → RtlUserThreadStart`.
 
 ### Cross-Compiling with CMake (Linux)
 
@@ -149,36 +98,53 @@ Output files are placed in `x64/Release/*.x64.o` and `Release/*.x86.o`,
 matching the layout expected by `sleepmask.cna`. The `boflint` linter runs
 automatically on each `.o` file as a post-build step.
 
-### Logging
+To use Sleepmask-VS:
+1. Enable the Sleepmask (`stage.sleep_mask "true";`)
+2. Enable required BeaconGate functions (`stage.beacon_gate { ... }`)
+3. Compile Sleepmask-VS
+4. Load `sleepmask.cna` in the Script Manager. This will create a new menu item called Sleepmask
+5. Select the required Sleepmask from the drop down menu item
+6. Save the configuration
+7. Export a Beacon
 
-You can enable logging for the release build of your Sleepmask via setting the following define in `debug.h`:
-```
-// Controls logging for the release build
-#define ENABLE_LOGGING 1
-```
-This will output debug information to `OutputDebugString()` and so will be visible via SysInternal's `DbgView` or via attaching a debugger (i.e. `Windbg`). The following shows debug output in `WinDbg` for the `draugr-sleepmask`:
-```
-SLEEPMASK: Masking Section - Address: 0000000000C9D000
-SLEEPMASK: Masking Section - Address: 0000000000CA0000
-SLEEPMASK: Calling INTERNETCONNECTA via DraugrGate
-Calling INTERNETCONNECTA
-Arg 0: 0x0000000000CC0004
-Arg 1: 0x00000000000F1520
-Arg 2: 0x0000000000000050
-Arg 3: 0x0000000000000000
-Arg 4: 0x0000000000000000
-Arg 5: 0x0000000000000003
-Arg 6: 0x0000000000000000
-Arg 7: 0x00000000000FE9F0
-ModLoad: 00007ffa`8c0c0000 00007ffa`8c0cb000   C:\Windows\SYSTEM32\WINNSI.DLL
-DRAUGR: Finding suitable draugr trampoline gadget...
-DRAUGR: Trampoline: 0x00007FFA8F8E6A23
-DRAUGR: Trampoline func stack size: 192
-DRAUGR: Invoking DraugrSpoofStub...
-ModLoad: 00007ffa`91050000 00007ffa`91058000   C:\Windows\System32\NSI.dll
-DRAUGR: Return value: 0x0000000000CC0008
-SLEEPMASK: Unmasking Section - Address: 0000000000C40000
-```
+### pe-sieve evasion
+
+[pe-sieve](https://github.com/hasherezade/pe-sieve) scans a target process for
+in-memory implant indicators: injected/replaced PEs, executable shellcode regions,
+hooks, and other anomalies. During sleep, the threadpool-sleepmask defeats this
+by:
+
+1. Encrypting the beacon's PE sections and heap records (RC4)
+2. Encrypting its own executable `.text` section (RC4 via `SystemFunction032`)
+3. Changing its own memory protection to `PAGE_READWRITE` (non-executable)
+
+With the implant's code encrypted and non-executable, pe-sieve's shellcode and
+PE-image scanners find no actionable artifacts. When the sleep expires, the
+timer chain decrypts and restores everything before the beacon resumes execution.
+
+## Sleepmask-VS
+
+In addition to `threadpool-sleepmask`, this repository contains sleepmask examples built on top of the Beacon 
+Object File Visual Studio template ([BOF-VS](https://github.com/Cobalt-Strike/bof-vs)).
+Sleepmask-VS is intended to function as a library, however, to support development efforts,
+we have included the examples described below.
+
+**Note**: This repository assumes familiarity with BOF-VS. The BOF-VS project README contains
+information about the Dynamic Function Resolution (DFR) macros and helper functions used
+throughout this project.
+
+## Other Sleepmask Variants
+
+* `draugr-sleepmask` — BeaconGate example using return address spoofing and a
+  spoofed stack frame to create a legitimate-looking call stack
+  ([Draugr](https://github.com/NtDallas/Draugr))
+* `retaddrspoofing-sleepmask` — BeaconGate example that spoofs the return
+  address of proxied WinAPIs
+* `indirectsyscalls-sleepmask` — BeaconGate example using indirect syscalls
+  for proxied WinAPIs
+* `default-sleepmask` — Minimal baseline sleepmask
+
+For more information about the template used by this repository, see the original [sleepmask-vs](https://github.com/Cobalt-Strike/sleepmask-vs).
 
 ### Acknowledgments
 
