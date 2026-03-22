@@ -16,6 +16,8 @@ we have included the examples described below:
   spoofing for all other proxied WinAPIs. Includes Ekko-style self-masking: the sleepmask's
   own `.text` section is encrypted during sleep via an `NtContinue` timer chain that calls
   `SystemFunction032` (advapi32 RC4) and `VirtualProtect` from outside the sleepmask code.
+  Context is captured on the timer thread itself (via `RtlCaptureContext` as a timer callback)
+  and event synchronization (`NtSignalAndWaitForSingleObject`) eliminates race conditions.
   Falls back to basic timer sleep if `advapi32.dll` is unavailable.
 
 Additionally, for testing custom call gates we have added:
@@ -177,3 +179,10 @@ ModLoad: 00007ffa`91050000 00007ffa`91058000   C:\Windows\System32\NSI.dll
 DRAUGR: Return value: 0x0000000000CC0008
 SLEEPMASK: Unmasking Section - Address: 0000000000C40000
 ```
+
+### Acknowledgments
+
+* [MalDev Academy](https://maldevacademy.com/) — The `threadpool-sleepmask` self-masking
+  implementation is based on MalDev Academy's race-condition-free Ekko sleep obfuscation
+  technique, which captures the thread context on the timer thread itself and uses
+  `NtSignalAndWaitForSingleObject` for atomic chain synchronization.
